@@ -2,10 +2,12 @@ import io
 import logging
 import os
 import tempfile
+import threading
 import time
 from typing import TYPE_CHECKING
 
 import Quartz
+import ScreenCaptureKit
 import objc
 from PIL import Image
 from PySide6.QtCore import QRect
@@ -50,6 +52,99 @@ def cgimageref_to_image(imgref) -> Image:
             f.write(py_buf.getbuffer())
 
     return out
+
+
+class ScreenCaptureError(Exception):
+    pass
+
+
+# CGWindowListCreateImage cannot capture windows on macOS 14+, so captures go
+# through ScreenCaptureKit instead. Its APIs are async; _sck_call waits for the
+# completion handler so callers keep the old synchronous interface.
+_sck_lock = threading.Lock()
+_sck_content = None
+
+
+def _sck_call(func, *args):
+    result = {}
+    done = threading.Event()
+
+    def completion(value, error):
+        result["value"] = value
+        result["error"] = error
+        done.set()
+
+    func(*args, completion)
+    if not done.wait(5):
+        raise ScreenCaptureError("ScreenCaptureKit request timed out")
+    if result["error"] is not None or result["value"] is None:
+        raise ScreenCaptureError(str(result["error"] or "no data returned"))
+    return result["value"]
+
+
+def _shareable_content(refresh=False):
+    global _sck_content
+    with _sck_lock:
+        if _sck_content is None or refresh:
+            # ScreenCaptureKit aborts the process if no window server
+            # connection exists yet (CGS_REQUIRE_INIT)
+            Quartz.CGMainDisplayID()
+            _sck_content = _sck_call(
+                ScreenCaptureKit.SCShareableContent.getShareableContentWithCompletionHandler_
+            )
+        return _sck_content
+
+
+def _sck_screenshot(content_filter, width, height, source_rect=None):
+    config = ScreenCaptureKit.SCStreamConfiguration.alloc().init()
+    config.setWidth_(int(width))
+    config.setHeight_(int(height))
+    config.setShowsCursor_(False)
+    config.setIgnoreShadowsSingleWindow_(True)
+    if source_rect is not None:
+        config.setSourceRect_(source_rect)
+    return _sck_call(
+        ScreenCaptureKit.SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_,
+        content_filter,
+        config,
+    )
+
+
+def sck_capture_window(wid, width, height, refresh=False):
+    content = _shareable_content(refresh)
+    window = next((w for w in content.windows() if w.windowID() == wid), None)
+    if window is None:
+        if refresh:
+            raise ScreenCaptureError(f"Window {wid} not found by ScreenCaptureKit")
+        return sck_capture_window(wid, width, height, refresh=True)
+
+    content_filter = (
+        ScreenCaptureKit.SCContentFilter.alloc().initWithDesktopIndependentWindow_(
+            window
+        )
+    )
+    return _sck_screenshot(content_filter, width, height)
+
+
+def sck_capture_desktop(x, y, w, h):
+    content = _shareable_content()
+    display = next(
+        (
+            d
+            for d in content.displays()
+            if Quartz.CGRectContainsPoint(d.frame(), Quartz.CGPointMake(x, y))
+        ),
+        content.displays()[0],
+    )
+    content_filter = (
+        ScreenCaptureKit.SCContentFilter.alloc().initWithDisplay_excludingWindows_(
+            display, []
+        )
+    )
+    scale = content_filter.pointPixelScale() or 1
+    frame = display.frame()
+    rect = Quartz.CGRectMake(x - frame.origin.x, y - frame.origin.y, w, h)
+    return _sck_screenshot(content_filter, w * scale, h * scale, source_rect=rect)
 
 
 # This decorator does not support being a class method
@@ -162,17 +257,24 @@ class QuartzGameInstance(PsUtilNetStat, GameInstance):
         if (time.monotonic() - self.__game_last_grab) * 1000 < self.refresh_rate:
             return self.__game_last_image
 
-        imgref = Quartz.CGWindowListCreateImageFromArray(
-            Quartz.CGRectNull,
-            [self.wid],
-            Quartz.kCGWindowImageBoundsIgnoreFraming,
-        )
-        if not imgref:
-            self.manager.request_accessibility_popup.emit()
-            raise NoCapturePermission
+        bounds = self.get_position()
+        scale = self.get_scaling()
+        width = int(bounds.width() * scale)
+        height = int(bounds.height() * scale)
+
+        try:
+            imgref = sck_capture_window(self.wid, width, height)
+        except ScreenCaptureError:
+            try:
+                # the cached window reference may be stale, retry with a fresh one
+                imgref = sck_capture_window(self.wid, width, height, refresh=True)
+            except ScreenCaptureError:
+                if not Quartz.CGPreflightScreenCaptureAccess():
+                    self.manager.request_accessibility_popup.emit()
+                    raise NoCapturePermission
+                raise
 
         out = cgimageref_to_image(imgref)
-        scale = self.get_scaling()
         if scale > 1:
             out = out.resize(
                 (int(out.width / scale), int(out.height / scale)), Image.NEAREST
@@ -183,12 +285,7 @@ class QuartzGameInstance(PsUtilNetStat, GameInstance):
         return out
 
     def grab_desktop(self, x: int, y: int, w: int, h: int) -> Image:
-        imgref = Quartz.CGWindowListCreateImage(
-            Quartz.CGRect(Quartz.CGPoint(x, y), Quartz.CGSize(w, h)),
-            Quartz.kCGWindowListOptionAll,
-            Quartz.kCGNullWindowID,
-            Quartz.kCGWindowImageDefault,
-        )
+        imgref = sck_capture_desktop(x, y, w, h)
         out = cgimageref_to_image(imgref)
         return out.resize((w, h), Image.NEAREST)
 
