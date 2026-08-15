@@ -119,13 +119,9 @@ class AppStore(QObject):
         return self.settings.value("apps/_meta/isDefaultLoaded")
 
     def load_default_apps(self):
-        def on_progress(value):
-            if value != self.app_progress.maximum():
-                return
-
+        def on_finished():
             self.settings.setValue("apps/_meta/isDefaultLoaded", True)
             logger.info("Default apps loaded")
-            self.add_app_thread.progress.disconnect(on_progress)
             del self.app_progress
             del self.add_app_thread
 
@@ -133,20 +129,16 @@ class AppStore(QObject):
 
         self.add_app_thread = _FetchRegistryThread(self, apps_manifest=REGISTRY_URL)
         self.add_app_thread.progress.connect(self.app_progress.setValue)
-        self.add_app_thread.progress.connect(on_progress)
         self.add_app_thread.items.connect(self.app_progress.setMaximum)
         self.add_app_thread.label.connect(self.app_progress.setLabelText)
+        self.add_app_thread.finished.connect(on_finished)
         self.app_progress.canceled.connect(self.add_app_thread.cancel)
         self.add_app_thread.start()
 
         self.app_progress.show()
 
     def add_app_ui(self, manifests: List[str]):
-        def on_progress(value):
-            if value != self.app_progress.maximum():
-                return
-
-            self.add_app_thread.progress.disconnect(on_progress)
+        def on_finished():
             del self.app_progress
             del self.add_app_thread
 
@@ -163,9 +155,9 @@ class AppStore(QObject):
 
         self.add_app_thread = _FetchRegistryThread(self, apps=manifests)
         self.add_app_thread.progress.connect(self.app_progress.setValue)
-        self.add_app_thread.progress.connect(on_progress)
         self.add_app_thread.items.connect(self.app_progress.setMaximum)
         self.add_app_thread.label.connect(self.app_progress.setLabelText)
+        self.add_app_thread.finished.connect(on_finished)
         self.add_app_thread.failed.connect(on_failed)
         self.app_progress.canceled.connect(self.add_app_thread.cancel)
         self.add_app_thread.start()
