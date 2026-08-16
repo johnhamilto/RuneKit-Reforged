@@ -1,5 +1,6 @@
 """Built-in clue solver for treasure trail clues."""
 import html
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -37,6 +38,21 @@ class _SolveThread(QThread):
         self.instance = instance
         self.cache_dir = cache_dir
 
+    def _hint_path(self) -> Path:
+        return self.cache_dir / "scale_hint.json"
+
+    def _load_hint(self):
+        try:
+            return json.loads(self._hint_path().read_text())["scale"]
+        except Exception:
+            return None
+
+    def _save_hint(self, scale: float):
+        try:
+            self._hint_path().write_text(json.dumps({"scale": scale}))
+        except Exception:
+            pass
+
     def _puzzle_title(self, result) -> str:
         for line in result.lines:
             for title in ("lockbox", "towers", "celtic knot"):
@@ -46,6 +62,7 @@ class _SolveThread(QThread):
 
     def run(self):
         try:
+            hint = self._load_hint()
             self.progress.emit("Reading screen text…")
             frame = self.instance.grab_game()
             dbs = solver.load_databases(self.cache_dir)
@@ -53,7 +70,7 @@ class _SolveThread(QThread):
             if result.status == "unsupported":
                 # a clue interface with no matchable text: try image matching
                 self.progress.emit("Matching map image…")
-                match = maps_mod.read_map_clue(detection.to_array(frame), dbs, ClueAssets(self.cache_dir))
+                match = maps_mod.read_map_clue(detection.to_array(frame), dbs, ClueAssets(self.cache_dir), hint=hint)
                 if match is not None:
                     result.status = "solved"
                     result.read_text = "(map image)"
@@ -70,13 +87,14 @@ class _SolveThread(QThread):
 
             if title == "lockbox":
                 self.progress.emit("Reading the lockbox…")
-                read = lockbox_mod.read_lockbox(arr, assets)
+                read = lockbox_mod.read_lockbox(arr, assets, hint=hint)
                 if read is None:
                     self.failed.emit(
                         "Lockbox detected but the grid could not be read. "
                         "Make sure the whole box is visible and try again."
                     )
                     return
+                self._save_hint(read.scale)
                 sol = lockbox_mod.solve_lockbox(read.grid)
                 if sol is None:
                     self.failed.emit(
@@ -88,13 +106,14 @@ class _SolveThread(QThread):
 
             if title == "towers":
                 self.progress.emit("Reading the towers board…")
-                read = towers_mod.read_towers(arr, assets)
+                read = towers_mod.read_towers(arr, assets, hint=hint)
                 if read is None:
                     self.failed.emit(
                         "Towers puzzle detected but the clues could not be read. "
                         "Make sure the whole board is visible and try again."
                     )
                     return
+                self._save_hint(read.scale)
                 sols = towers_mod.solve_towers(read, limit=2)
                 if not sols:
                     self.failed.emit(
@@ -109,8 +128,9 @@ class _SolveThread(QThread):
                 return
 
             self.progress.emit("Looking for a slide puzzle…")
-            board = slide_mod.read_slide(arr, assets)
+            board = slide_mod.read_slide(arr, assets, hint=hint)
             if board is not None:
+                self._save_hint(board.scale)
                 try:
                     moves = slide_solver.solve(board.board)
                 except ValueError as e:
@@ -123,7 +143,7 @@ class _SolveThread(QThread):
                 return
 
             self.progress.emit("Looking for a compass…")
-            comp = compass_mod.read_compass(arr, assets)
+            comp = compass_mod.read_compass(arr, assets, hint=hint)
             if comp is not None:
                 self.ok.emit(comp)
                 return

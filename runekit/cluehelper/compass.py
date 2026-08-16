@@ -108,10 +108,10 @@ def table_direction(raw: float) -> float:
     return math.atan2(-dz, -dx)
 
 
-def read_compass(frame, assets: ClueAssets) -> Optional[CompassRead]:
+def read_compass(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optional[CompassRead]:
     frame = detection.to_array(frame)
     north = detection.to_array(assets.needle("northimg"))
-    m = detection.calibrate_scale(frame, north)
+    m = detection.calibrate_scale(frame, north, hint=hint)
     if not m.ok:
         return None
     s = m.scale

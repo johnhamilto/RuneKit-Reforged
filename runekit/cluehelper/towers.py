@@ -88,13 +88,13 @@ class _DigitTemplates:
         return best_digit, best_score
 
 
-def read_towers(frame, assets: ClueAssets) -> Optional[TowersRead]:
+def read_towers(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optional[TowersRead]:
     frame = detection.to_array(frame)
     exitbtn = detection.to_array(assets.needle("exitbutton"))
     topleft = detection.to_array(assets.needle("topleft"))
     digits = _DigitTemplates(assets.font("font_chat14"))
 
-    x_match = detection.calibrate_scale(frame, exitbtn)
+    x_match = detection.calibrate_scale(frame, exitbtn, hint=hint)
     if not x_match.ok:
         logger.info("Towers: close button not found")
         return None

@@ -58,16 +58,61 @@ def degrade_template(template: np.ndarray, scale: float) -> np.ndarray:
     return np.asarray(dec).astype(np.int32)
 
 
-def locate(frame: np.ndarray, template: np.ndarray):
-    """Best position of template in frame by masked SQDIFF. Returns (x, y)."""
+def _masked_sqdiff(frame32: np.ndarray, template: np.ndarray):
     import cv2
 
-    f = frame[:, :, :3].astype(np.float32)
     t = template[:, :, :3].astype(np.float32)
     m = np.repeat((template[:, :, 3:4] / 255.0).astype(np.float32), 3, axis=2)
-    res = cv2.matchTemplate(f, t, cv2.TM_SQDIFF, mask=m)
-    _, _, loc, _ = cv2.minMaxLoc(res)
-    return loc
+    return cv2.matchTemplate(frame32, t, cv2.TM_SQDIFF, mask=m)
+
+
+def locate(frame: np.ndarray, template: np.ndarray):
+    """Best position of template in frame by masked SQDIFF. Returns (x, y).
+
+    Masked matching has no FFT fast path, so on large frames the search runs
+    on a half-resolution pyramid and the best peaks are refined at full
+    resolution in small windows."""
+    import cv2
+
+    f32 = frame[:, :, :3].astype(np.float32)
+    th, tw = template.shape[:2]
+
+    small_enough = frame.shape[0] * frame.shape[1] <= 1_500_000
+    if small_enough or min(th, tw) < 8:
+        res = _masked_sqdiff(f32, template)
+        _, _, loc, _ = cv2.minMaxLoc(res)
+        return loc
+
+    im = Image.fromarray(template.astype(np.uint8))
+    t2 = np.asarray(
+        im.resize((max(2, tw // 2), max(2, th // 2)), Image.BILINEAR)
+    ).astype(np.int32)
+    f2 = cv2.resize(f32, (f32.shape[1] // 2, f32.shape[0] // 2), interpolation=cv2.INTER_AREA)
+    res = _masked_sqdiff(f2, t2)
+
+    # take several coarse peaks with suppression, refine each at full res
+    best = None
+    r = res.copy()
+    for _ in range(5):
+        _, _, loc, _ = cv2.minMaxLoc(r)
+        px, py = loc[0] * 2, loc[1] * 2
+        y0 = max(0, py - 4)
+        x0 = max(0, px - 4)
+        y1 = min(frame.shape[0], py + th + 4)
+        x1 = min(frame.shape[1], px + tw + 4)
+        if y1 - y0 > th and x1 - x0 > tw:
+            sub = _masked_sqdiff(f32[y0:y1, x0:x1], template)
+            val, _, sloc, _ = cv2.minMaxLoc(sub)
+            cand = (val, (x0 + sloc[0], y0 + sloc[1]))
+            if best is None or cand[0] < best[0]:
+                best = cand
+        sy0 = max(0, loc[1] - t2.shape[0])
+        sx0 = max(0, loc[0] - t2.shape[1])
+        r[sy0:loc[1] + t2.shape[0], sx0:loc[0] + t2.shape[1]] = np.inf
+    if best is None:
+        _, _, loc, _ = cv2.minMaxLoc(res)
+        return (loc[0] * 2, loc[1] * 2)
+    return best[1]
 
 
 @dataclass
@@ -117,21 +162,51 @@ def find_template(
             int(rng.integers(0, frame.shape[1] - tw)),
             int(rng.integers(0, frame.shape[0] - th)),
         )
-        for _ in range(120)
+        for _ in range(60)
     )
     best.margin = best.zncc - bg
     return best
 
 
-def calibrate_scale(frame, needle, coarse=(1.0, 3.0), fine_step=0.03125) -> Match:
-    """Two-pass scale calibration against a known needle."""
+def calibrate_scale(frame, needle, coarse=(1.0, 3.0), fine_step=0.03125,
+                    hint: Optional[float] = None) -> Match:
+    """Two-pass scale calibration against a known needle. A hint (the scale
+    found on a previous solve) is tried as a narrow fast path first, falling
+    back to the full sweep when it no longer matches."""
     frame = to_array(frame)
     needle = to_array(needle)
+    if hint:
+        m = find_template(frame, needle, np.arange(hint * 0.94, hint * 1.06, fine_step))
+        if m.ok:
+            return m
     first = find_template(frame, needle, np.arange(coarse[0], coarse[1] + 1e-9, 0.125))
     if first.zncc < 0.5:
         return first
     lo, hi = first.scale - 0.125, first.scale + 0.125
     return find_template(frame, needle, np.arange(lo, hi + 1e-9, fine_step))
+
+
+class TemplateBank:
+    """Same-size RGB templates prepared for batch ZNCC scoring: one matrix
+    product scores a crop against every template at once."""
+
+    def __init__(self, arrays: Sequence[np.ndarray]):
+        stack = np.stack([a[:, :, :3] for a in arrays]).astype(np.float64)
+        self.count = stack.shape[0]
+        self.shape = stack.shape[1:3]
+        flat = stack.reshape(self.count, -1)
+        z = flat - flat.mean(axis=1, keepdims=True)
+        norms = np.sqrt((z * z).sum(axis=1))
+        self.z = z
+        self.norms = np.maximum(norms, 1e-9)
+
+    def scores(self, crop: np.ndarray) -> np.ndarray:
+        c = crop[:, :, :3].astype(np.float64).reshape(-1)
+        c = c - c.mean()
+        cn = math.sqrt((c * c).sum())
+        if cn < 1e-9:
+            return np.full(self.count, -1.0)
+        return (self.z @ c) / (self.norms * cn)
 
 
 def normalize_region(frame, x: int, y: int, w: int, h: int, scale: float) -> np.ndarray:

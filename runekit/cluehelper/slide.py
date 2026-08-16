@@ -43,14 +43,19 @@ class SlideSolution:
     moves: List[int]  # grid cells to click, in order
 
 
-def _ref_tiles(assets: ClueAssets, theme: str) -> List[np.ndarray]:
-    img = assets.slide_theme(theme)
-    tiles = []
-    for r in range(5):
-        for c in range(5):
-            t = img[r * REF_TILE:(r + 1) * REF_TILE, c * REF_TILE:(c + 1) * REF_TILE]
-            tiles.append(detection.to_array(t))
-    return tiles
+_BANKS = {}
+
+
+def _theme_bank(assets: ClueAssets, theme: str) -> detection.TemplateBank:
+    if theme not in _BANKS:
+        img = assets.slide_theme(theme)
+        tiles = [
+            detection.to_array(img[r * REF_TILE:(r + 1) * REF_TILE, c * REF_TILE:(c + 1) * REF_TILE])
+            for r in range(5)
+            for c in range(5)
+        ]
+        _BANKS[theme] = detection.TemplateBank(tiles)
+    return _BANKS[theme]
 
 
 def _captured_tile(norm: np.ndarray, cell: int, jx: int = 0, jy: int = 0) -> Optional[np.ndarray]:
@@ -80,32 +85,26 @@ def _normalize_board(frame: np.ndarray, needle: detection.Match, scale: float) -
     return norm
 
 
-def read_slide(frame, assets: ClueAssets) -> Optional[SlideBoard]:
+def read_slide(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optional[SlideBoard]:
     frame = detection.to_array(frame)
-    m = detection.calibrate_scale(frame, assets.needle("slide"))
+    m = detection.calibrate_scale(frame, assets.needle("slide"), hint=hint)
     if not m.ok:
         return None
     logger.info("Slide interface at (%d, %d), scale %.3f, zncc %.3f", m.x, m.y, m.scale, m.zncc)
 
     # theme vote on probe cells, refining scale at the same time
-    ref_cache = {}
     best = None  # (score, scale, norm, theme)
     for s in (m.scale * 0.95, m.scale, m.scale * 1.05):
         norm = _normalize_board(frame, m, s)
         if norm is None:
             continue
+        caps = [c for c in (_captured_tile(norm, cell) for cell in THEME_PROBE_CELLS) if c is not None]
+        if not caps:
+            continue
         theme_scores = {}
         for theme in SLIDE_THEMES:
-            if theme not in ref_cache:
-                ref_cache[theme] = _ref_tiles(assets, theme)
-            refs = ref_cache[theme]
-            total = 0.0
-            for cell in THEME_PROBE_CELLS:
-                cap = _captured_tile(norm, cell)
-                if cap is None:
-                    break
-                total += max(detection.zncc(cap, ref, 0, 0) for ref in refs[:BLANK])
-            theme_scores[theme] = total
+            bank = _theme_bank(assets, theme)
+            theme_scores[theme] = sum(float(bank.scores(cap)[:BLANK].max()) for cap in caps)
         theme, score = max(theme_scores.items(), key=lambda kv: kv[1])
         if best is None or score > best[0]:
             best = (score, s, norm, theme)
@@ -114,7 +113,7 @@ def read_slide(frame, assets: ClueAssets) -> Optional[SlideBoard]:
         logger.info("Slide theme identification failed (best %.2f)", best[0] if best else -1)
         return None
     _, scale, norm, theme = best
-    refs = ref_cache[theme]
+    bank = _theme_bank(assets, theme)
 
     # blank cell: darkest, flattest tile
     stats = []
@@ -128,9 +127,11 @@ def read_slide(frame, assets: ClueAssets) -> Optional[SlideBoard]:
     cells = [c for c in range(25) if c != blank_cell]
     scores = np.full((25, 24), -1.0)
     for cell in cells:
-        caps = [c for c in (_captured_tile(norm, cell, jx, jy) for jx, jy in jitters) if c is not None]
-        for part in range(24):
-            scores[cell, part] = max(detection.zncc(cap, refs[part], 0, 0) for cap in caps)
+        for jx, jy in jitters:
+            cap = _captured_tile(norm, cell, jx, jy)
+            if cap is None:
+                continue
+            scores[cell] = np.maximum(scores[cell], bank.scores(cap)[:BLANK])
 
     # greedy unique assignment
     board = [-1] * 25

@@ -94,12 +94,12 @@ class MapMatch:
     margin: float  # distance gap to the runner-up
 
 
-def find_modal(frame: np.ndarray, assets: ClueAssets):
+def find_modal(frame: np.ndarray, assets: ClueAssets, hint: Optional[float] = None):
     """Locate an eoc modal by close button + top-left corner.
     Returns (rect_x, rect_y, scale) in frame coords, or None."""
     exitbtn = detection.to_array(assets.needle("exitbutton"))
     topleft = detection.to_array(assets.needle("topleft"))
-    x_match = detection.calibrate_scale(frame, exitbtn)
+    x_match = detection.calibrate_scale(frame, exitbtn, hint=hint)
     if not x_match.ok:
         return None
     s = x_match.scale
@@ -113,7 +113,7 @@ def find_modal(frame: np.ndarray, assets: ClueAssets):
     return (x0 + corner.x + 4 * s, x_match.y + 24 * s, s)
 
 
-def read_map_clue(frame, dbs: dict, assets: ClueAssets) -> Optional[MapMatch]:
+def read_map_clue(frame, dbs: dict, assets: ClueAssets, hint: Optional[float] = None) -> Optional[MapMatch]:
     frame = detection.to_array(frame)
     refs = []
     for e in dbs["clues"]:
@@ -127,7 +127,7 @@ def read_map_clue(frame, dbs: dict, assets: ClueAssets) -> Optional[MapMatch]:
     if not refs:
         return None
 
-    modal = find_modal(frame, assets)
+    modal = find_modal(frame, assets, hint=hint)
     if modal is None:
         logger.info("Map clue: modal not located")
         return None

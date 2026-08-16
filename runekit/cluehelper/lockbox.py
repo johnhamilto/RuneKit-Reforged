@@ -84,14 +84,14 @@ def _find_in_region(frame, needle, x0, y0, x1, y1, scales):
     return m
 
 
-def read_lockbox(frame, assets: ClueAssets) -> Optional[LockboxRead]:
+def read_lockbox(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optional[LockboxRead]:
     frame = detection.to_array(frame)
     needles = [detection.to_array(assets.needle(n)) for n in TILE_NAMES]
 
     anchor = None
     anchor_needle = None
     for needle in needles:
-        m = detection.calibrate_scale(frame, needle)
+        m = detection.calibrate_scale(frame, needle, hint=hint)
         if m.ok and (anchor is None or m.zncc > anchor.zncc):
             anchor = m
             anchor_needle = needle
