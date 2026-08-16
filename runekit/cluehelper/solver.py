@@ -1,12 +1,14 @@
 """Clue recognition: OCR the game frame, find the clue interface by its title,
-and match the clue text against the runeapps clue database.
+and solve what the text allows: database text clues, coordinate clues, and
+scan area identification.
 
-The database is fetched at runtime and cached locally; it is runeapps.org
-data and is never shipped with RuneKit.
+Databases are fetched at runtime and cached locally; they are runeapps.org
+data and are never shipped with RuneKit.
 """
 import difflib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +23,7 @@ from . import vision
 logger = logging.getLogger(__name__)
 
 CLUES_URL = "https://runeapps.org/apps/clue/clues.json"
+COORDS_URL = "https://runeapps.org/apps/clue/coords.json"
 CACHE_MAX_AGE = 7 * 24 * 3600
 
 INTERFACE_TITLES = ("mysterious clue scroll", "treasure map")
@@ -29,6 +32,17 @@ TEXT_TYPES = ("simple", "cryptic", "anagram", "emote", "action")
 
 SOLVED_RATIO = 0.75
 LOW_RATIO = 0.55
+
+# The in-game coordinate system: 00 degrees 00 minutes is world tile
+# (2440, 3161) and one minute of arc is 1/1.875 tiles.
+COORD_ORIGIN_X = 2440
+COORD_ORIGIN_Z = 3161
+COORD_TILES_PER_MINUTE = 1 / 1.875
+COORD_RE = re.compile(
+    r"(\d{1,2})\s*degrees?[,.\s]*(\d{1,2})\s*minutes?[,.\s]*(north|south)"
+    r"[,.\s]*(\d{1,2})\s*degrees?[,.\s]*(\d{1,2})\s*minutes?[,.\s]*(east|west)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -44,32 +58,51 @@ class SolveResult:
         return self.matches[0] if self.matches else None
 
 
-def load_clue_db(cache_path: Path) -> List[dict]:
+def _fetch_json(url: str, cache_path: Path):
     fresh = cache_path.exists() and time.time() - cache_path.stat().st_mtime < CACHE_MAX_AGE
     if not fresh:
         try:
-            req = requests.get(CLUES_URL, timeout=10)
+            req = requests.get(url, timeout=10)
             req.raise_for_status()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(req.content)
-            logger.info("Clue database updated from %s", CLUES_URL)
+            logger.info("Updated %s", cache_path.name)
         except Exception:
             if not cache_path.exists():
                 raise
-            logger.warning("Clue database refresh failed, using cache", exc_info=True)
+            logger.warning("Refresh of %s failed, using cache", url, exc_info=True)
 
     return json.loads(cache_path.read_text())
 
 
+def load_databases(cache_dir: Path) -> dict:
+    return {
+        "clues": _fetch_json(CLUES_URL, cache_dir / "clue_db.json"),
+        "coords": _fetch_json(COORDS_URL, cache_dir / "coord_db.json"),
+    }
+
+
 def clue_text(entry: dict) -> str:
-    clue = entry.get("clue") or ""
+    clue = entry.get("scantext") if entry.get("type") == "scan" else entry.get("clue")
     if isinstance(clue, list):
         clue = " ".join(str(s) for s in clue)
-    return clue
+    return clue or ""
 
 
 def describe(entry: dict) -> str:
-    parts = [f"Type: {entry.get('type', 'unknown')}"]
+    kind = entry.get("type", "unknown")
+    parts = [f"Type: {kind}"]
+    if kind == "coordinate":
+        where = f"Dig at: x={entry['x']}, z={entry['z']}"
+        if entry.get("level"):
+            where += f", level {entry['level']}"
+        parts.append(where)
+        if not entry.get("known_spot"):
+            parts.append("Note: no known dig spot at this exact tile, computed from the scroll text")
+        return "\n".join(parts)
+
+    if kind == "scan":
+        parts.append(f"Scan area: {entry.get('scan', 'unknown')}")
     answer = entry.get("answer")
     if answer:
         parts.append(f"Answer: {answer}")
@@ -91,7 +124,30 @@ def _to_image(frame) -> Image.Image:
     return frame
 
 
-def solve_frame(frame, db: List[dict], ocr=vision.ocr_lines) -> SolveResult:
+def parse_coordinates(text: str) -> Optional[dict]:
+    # OCR sometimes reads 0 as O inside the number tokens
+    cleaned = re.sub(r"\b([0-9O]{1,2})\b", lambda m: m.group(1).replace("O", "0"), text)
+    m = COORD_RE.search(cleaned)
+    if not m:
+        return None
+    latdeg, latmin, ns, longdeg, longmin, ew = m.groups()
+    ns_sign = 1 if ns.lower() == "north" else -1
+    ew_sign = 1 if ew.lower() == "east" else -1
+    x = COORD_ORIGIN_X + round(ew_sign * (60 * int(longdeg) + int(longmin)) * COORD_TILES_PER_MINUTE)
+    z = COORD_ORIGIN_Z + round(ns_sign * (60 * int(latdeg) + int(latmin)) * COORD_TILES_PER_MINUTE)
+    return {"x": x, "z": z, "text": m.group(0)}
+
+
+def snap_to_dig_spot(x: int, z: int, coords: List[dict]) -> Tuple[Optional[dict], int]:
+    best, best_d = None, 10 ** 9
+    for spot in coords:
+        d = max(abs(spot["x"] - x), abs(spot["z"] - z))
+        if d < best_d:
+            best, best_d = spot, d
+    return best, best_d
+
+
+def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
     lines = ocr(_to_image(frame))
 
     title = None
@@ -123,9 +179,25 @@ def solve_frame(frame, db: List[dict], ocr=vision.ocr_lines) -> SolveResult:
     if not body:
         return result
 
+    full_text = " ".join(l["text"] for l in body).strip()
+
+    coord = parse_coordinates(full_text)
+    if coord:
+        entry = {"type": "coordinate", "x": coord["x"], "z": coord["z"]}
+        spot, dist = snap_to_dig_spot(coord["x"], coord["z"], dbs["coords"])
+        if spot is not None and dist <= 3:
+            entry.update(x=spot["x"], z=spot["z"], level=spot.get("level"), known_spot=True)
+        result.status = "solved"
+        result.read_text = coord["text"]
+        result.matches = [(1.0 if entry.get("known_spot") else 0.9, entry)]
+        return result
+
     # The clue text is the top run of lines; anything below it (tooltips, game
     # UI) hurts the match. Score every prefix and keep the best one.
-    candidates = [e for e in db if e.get("type") in TEXT_TYPES and clue_text(e)]
+    candidates = [
+        e for e in dbs["clues"]
+        if (e.get("type") in TEXT_TYPES or e.get("type") == "scan") and clue_text(e)
+    ]
     for k in range(1, len(body) + 1):
         read = " ".join(l["text"] for l in body[:k]).strip()
         scored = sorted(((_ratio(read, clue_text(e)), e) for e in candidates), key=lambda t: -t[0])

@@ -18,16 +18,16 @@ class _SolveThread(QThread):
     ok = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, instance: "GameInstance", cache_path: Path, parent=None):
+    def __init__(self, instance: "GameInstance", cache_dir: Path, parent=None):
         super().__init__(parent=parent)
         self.instance = instance
-        self.cache_path = cache_path
+        self.cache_dir = cache_dir
 
     def run(self):
         try:
             frame = self.instance.grab_game()
-            db = solver.load_clue_db(self.cache_path)
-            self.ok.emit(solver.solve_frame(frame, db))
+            dbs = solver.load_databases(self.cache_dir)
+            self.ok.emit(solver.solve_frame(frame, dbs))
         except Exception as e:
             logger.error("Clue solve failed", exc_info=True)
             self.failed.emit(str(e))
@@ -36,9 +36,8 @@ class _SolveThread(QThread):
 class ClueHelper(QObject):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self.cache_path = (
-            Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation))
-            / "clue_db.json"
+        self.cache_dir = Path(
+            QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
         )
         self._thread = None
 
@@ -47,7 +46,7 @@ class ClueHelper(QObject):
         if self._thread is not None and self._thread.isRunning():
             return
 
-        self._thread = _SolveThread(instance, self.cache_path, parent=self)
+        self._thread = _SolveThread(instance, self.cache_dir, parent=self)
         self._thread.ok.connect(self.on_result)
         self._thread.failed.connect(self.on_failed)
         self._thread.start()
