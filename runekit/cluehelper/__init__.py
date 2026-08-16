@@ -1,17 +1,28 @@
-"""Built-in clue solver for text-based treasure trail clues."""
+"""Built-in clue solver for treasure trail clues."""
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QStandardPaths, QThread, Signal, Slot
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtCore import QObject, QStandardPaths, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QBrush, QColor, QFont, QPen
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
+    QGraphicsSimpleTextItem,
+    QMessageBox,
+)
 
-from runekit.cluehelper import solver
+from runekit import detection
+from runekit.cluehelper import slide as slide_mod
+from runekit.cluehelper import slide_solver, solver
+from runekit.cluehelper.assets import ClueAssets
 
 if TYPE_CHECKING:
     from runekit.game import GameInstance
 
 logger = logging.getLogger(__name__)
+
+OVERLAY_MOVES = 25
+OVERLAY_TIMEOUT_MS = 20000
 
 
 class _SolveThread(QThread):
@@ -27,7 +38,25 @@ class _SolveThread(QThread):
         try:
             frame = self.instance.grab_game()
             dbs = solver.load_databases(self.cache_dir)
-            self.ok.emit(solver.solve_frame(frame, dbs))
+            result = solver.solve_frame(frame, dbs)
+            if result.status != "no_clue":
+                self.ok.emit(result)
+                return
+
+            board = slide_mod.read_slide(detection.to_array(frame), ClueAssets(self.cache_dir))
+            if board is not None:
+                try:
+                    moves = slide_solver.solve(board.board)
+                except ValueError as e:
+                    self.failed.emit(
+                        f"Slide puzzle detected but the board read is inconsistent ({e}).\n"
+                        "Make sure no tile is mid-animation and try again."
+                    )
+                    return
+                self.ok.emit(slide_mod.SlideSolution(board, moves))
+                return
+
+            self.ok.emit(result)
         except Exception as e:
             logger.error("Clue solve failed", exc_info=True)
             self.failed.emit(str(e))
@@ -40,19 +69,80 @@ class ClueHelper(QObject):
             QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
         )
         self._thread = None
+        self._instance = None
 
     @Slot()
     def solve(self, instance: "GameInstance"):
         if self._thread is not None and self._thread.isRunning():
             return
 
+        self._instance = instance
         self._thread = _SolveThread(instance, self.cache_dir, parent=self)
         self._thread.ok.connect(self.on_result)
         self._thread.failed.connect(self.on_failed)
         self._thread.start()
 
+    def _draw_slide_moves(self, sol: "slide_mod.SlideSolution") -> bool:
+        try:
+            area = self._instance.get_overlay_area()
+        except Exception:
+            return False
+        if area is None:
+            return False
+
+        bx, by, bw, _ = sol.board.board_rect
+        tile = bw / 5
+        items = []
+        visits = {}
+        for i, cell in enumerate(sol.moves[:OVERLAY_MOVES]):
+            r, c = divmod(cell, 5)
+            n = visits.get(cell, 0)
+            visits[cell] = n + 1
+            cx = bx + (c + 0.5) * tile + (n % 3 - 1) * 14
+            cy = by + (r + 0.5) * tile + (n // 3 % 3 - 1) * 14
+            dot = QGraphicsEllipseItem(cx - 10, cy - 10, 20, 20)
+            dot.setBrush(QBrush(QColor(20, 20, 30, 180)))
+            dot.setPen(QPen(QColor(255, 200, 40), 1.5))
+            dot.setParentItem(area)
+            label = QGraphicsSimpleTextItem(str(i + 1))
+            label.setBrush(QBrush(QColor(255, 220, 80)))
+            label.setFont(QFont("Verdana", 9, QFont.Weight.Bold))
+            rect = label.boundingRect()
+            label.setPos(cx - rect.width() / 2, cy - rect.height() / 2)
+            label.setParentItem(area)
+            items.extend((dot, label))
+
+        def cleanup():
+            for item in items:
+                scene = item.scene()
+                if scene is not None:
+                    scene.removeItem(item)
+
+        QTimer.singleShot(OVERLAY_TIMEOUT_MS, cleanup)
+        return True
+
+    def _show_slide(self, sol: "slide_mod.SlideSolution"):
+        drew = self._draw_slide_moves(sol)
+        msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
+        text = (
+            f"Slide puzzle read (theme {sol.board.theme}, "
+            f"confidence {sol.board.confidence:.0%}).\n\n"
+            f"Solution: {len(sol.moves)} moves."
+        )
+        if drew:
+            text += f"\n\nThe first {min(OVERLAY_MOVES, len(sol.moves))} clicks are numbered on the game. Solve again for the next batch."
+        msg.setText(text)
+        msg.setDetailedText(
+            "Full click sequence (row, column), 1-based:\n"
+            + " ".join(f"({cell // 5 + 1},{cell % 5 + 1})" for cell in sol.moves)
+        )
+        msg.exec()
+
     @Slot(object)
-    def on_result(self, result: "solver.SolveResult"):
+    def on_result(self, result):
+        if isinstance(result, slide_mod.SlideSolution):
+            self._show_slide(result)
+            return
         msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
         msg.setDetailedText(
             "Text found on screen:\n"
