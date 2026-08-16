@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 class TrayIcon(QSystemTrayIcon):
     on_settings = Signal()
+    on_solve_clue = Signal()
 
     host: "Host"
 
@@ -32,6 +33,8 @@ class TrayIcon(QSystemTrayIcon):
         self._setup_app_menu("", self.menu)
 
         self.menu.addSeparator()
+        self.menu_solve_clue = self.menu.addAction("Solve Clue on Screen")
+        self.menu_solve_clue.triggered.connect(self.on_solve_clue)
         self.menu_settings = self.menu.addAction("Settings")
         self.menu_settings.triggered.connect(self.on_settings)
         self.menu.addAction(

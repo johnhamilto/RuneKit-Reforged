@@ -794,6 +794,29 @@ pyobjc-core = ">=12.1"
 pyobjc-framework-Cocoa = ">=12.1"
 
 [[package]]
+name = "pyobjc-framework-coreml"
+version = "12.1"
+description = "Wrappers for the framework CoreML on macOS"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "sys_platform == \"darwin\""
+files = [
+    {file = "pyobjc_framework_coreml-12.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:df4e9b4f97063148cc481f72e2fbe3cc53b9464d722752aa658d7c0aec9f02fd"},
+    {file = "pyobjc_framework_coreml-12.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:16dafcfb123f022e62f47a590a7eccf7d0cb5957a77fd5f062b5ee751cb5a423"},
+    {file = "pyobjc_framework_coreml-12.1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:10dc8e8db53d7631ebc712cad146e3a9a9a443f4e1a037e844149a24c3c42669"},
+    {file = "pyobjc_framework_coreml-12.1-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:48fa3bb4a03fa23e0e36c93936dca2969598e4102f4b441e1663f535fc99cd31"},
+    {file = "pyobjc_framework_coreml-12.1-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:71de5b37e6a017e3ed16645c5d6533138f24708da5b56c35c818ae49d0253ee1"},
+    {file = "pyobjc_framework_coreml-12.1-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:a04a96e512ecf6999aa9e1f60ad5635cb9d1cd839be470341d8d1541797baef6"},
+    {file = "pyobjc_framework_coreml-12.1-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:7762b3dd2de01565b7cf3049ce1e4c27341ba179d97016b0b7607448e1c39865"},
+    {file = "pyobjc_framework_coreml-12.1.tar.gz", hash = "sha256:0d1a4216891a18775c9e0170d908714c18e4f53f9dc79fb0f5263b2aa81609ba"},
+]
+
+[package.dependencies]
+pyobjc-core = ">=12.1"
+pyobjc-framework-Cocoa = ">=12.1"
+
+[[package]]
 name = "pyobjc-framework-coretext"
 version = "10.3.2"
 description = "Wrappers for the framework CoreText on macOS"
@@ -866,6 +889,29 @@ files = [
 pyobjc-core = ">=10.3.2"
 pyobjc-framework-Cocoa = ">=10.3.2"
 pyobjc-framework-CoreMedia = ">=10.3.2"
+
+[[package]]
+name = "pyobjc-framework-vision"
+version = "10.3.2"
+description = "Wrappers for the framework Vision on macOS"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+markers = "sys_platform == \"darwin\""
+files = [
+    {file = "pyobjc_framework_Vision-10.3.2-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:62efeeef9317d6014b26e4476de45f4b2853970272e1a236e45044ad8ac8b2fb"},
+    {file = "pyobjc_framework_Vision-10.3.2-cp36-abi3-macosx_10_13_universal2.whl", hash = "sha256:cae03536f12ed5764ecfdcf9cf96b37e577cc6e8c466aeb23a6aa0682b45ae39"},
+    {file = "pyobjc_framework_Vision-10.3.2-cp36-abi3-macosx_10_9_universal2.whl", hash = "sha256:ba5ccd0bf12c29c2cdf1b52405c395929b5802e9120476b8e9a01af691ab33dc"},
+    {file = "pyobjc_framework_Vision-10.3.2-cp36-abi3-macosx_10_9_x86_64.whl", hash = "sha256:2b7edc178ebeb621ba9a239449f8ae1fc6b643f60914ff2be4dad69e901ca331"},
+    {file = "pyobjc_framework_Vision-10.3.2-cp36-abi3-macosx_11_0_universal2.whl", hash = "sha256:1083e23ee4dae7cca8e2d094b1995909690b277c967975227d3395222c0c7377"},
+    {file = "pyobjc_framework_vision-10.3.2.tar.gz", hash = "sha256:5cfea4a750657e2c8e7c8b0c26c7aac2578ba09ab8f66ffa0e2ee632410cacf3"},
+]
+
+[package.dependencies]
+pyobjc-core = ">=10.3.2"
+pyobjc-framework-Cocoa = ">=10.3.2"
+pyobjc-framework-CoreML = ">=10.3.2"
+pyobjc-framework-Quartz = ">=10.3.2"
 
 [[package]]
 name = "pyside6"
@@ -1086,4 +1132,4 @@ dev = ["pytest (>=8.4)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "76e2f62755cd82c90cb615ed5da13ef018374c2cc4d3ad96fbbe24445c69e9b2"
+content-hash = "cce69fbc4f57066eb4fb9ff8c038c4e0d60d6e47fa0366f903b4c16dd96936a3"

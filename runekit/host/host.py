@@ -8,6 +8,7 @@ from runekit.alt1.schema import AppManifest
 from runekit.alt1.utils import fetch_bom_json
 from runekit.app import App, AppStore
 from runekit.app.store import app_id
+from runekit.cluehelper import ClueHelper
 from runekit.host.settings import SettingsDialog
 from runekit.ui import AutoNotifier
 from runekit.ui.tray import TrayIcon
@@ -28,6 +29,7 @@ class Host:
         self.open_app = []
         self.notifier = AutoNotifier()
         self.app_store = AppStore()
+        self.clue_helper = ClueHelper()
         self.tray_icon = TrayIcon(self)
         self.setting_dialog = SettingsDialog(self)
         self.tray_icon.show()
@@ -35,6 +37,7 @@ class Host:
         QCoreApplication.instance().aboutToQuit.connect(self.on_before_quit)
         self.app_store.app_change.connect(self.tray_icon.update_menu)
         self.tray_icon.on_settings.connect(self.open_settings)
+        self.tray_icon.on_solve_clue.connect(self.solve_clue)
         self.manager.instance_removed.connect(self.on_game_quit)
 
     def on_before_quit(self):
@@ -102,6 +105,24 @@ class Host:
     def open_settings(self):
         self.setting_dialog.show()
         self.setting_dialog.raise_()
+
+    @Slot()
+    def solve_clue(self):
+        instance = self.manager.get_active_instance()
+
+        if not instance:
+            instances = self.manager.get_instances()
+            if not instances:
+                QMessageBox.critical(
+                    None,
+                    "No game instances found",
+                    "Cannot find open RuneScape window. Please launch the game first",
+                )
+                return
+
+            instance = instances[0]
+
+        self.clue_helper.solve(instance)
 
     @Slot()
     def on_game_quit(self, instance: "GameInstance"):
