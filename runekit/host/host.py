@@ -38,6 +38,7 @@ class Host:
         self.app_store.app_change.connect(self.tray_icon.update_menu)
         self.tray_icon.on_settings.connect(self.open_settings)
         self.tray_icon.on_solve_clue.connect(self.solve_clue)
+        self.clue_helper.solve_requested.connect(self.solve_clue)
         self.manager.instance_removed.connect(self.on_game_quit)
 
     def on_before_quit(self):
@@ -113,10 +114,8 @@ class Host:
         if not instance:
             instances = self.manager.get_instances()
             if not instances:
-                QMessageBox.critical(
-                    None,
-                    "No game instances found",
-                    "Cannot find open RuneScape window. Please launch the game first",
+                self.clue_helper.show_error(
+                    "Cannot find an open RuneScape window. Launch the game first."
                 )
                 return
 
