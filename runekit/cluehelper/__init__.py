@@ -15,6 +15,7 @@ from runekit import detection
 from runekit.cluehelper import lockbox as lockbox_mod
 from runekit.cluehelper import slide as slide_mod
 from runekit.cluehelper import slide_solver, solver
+from runekit.cluehelper import towers as towers_mod
 from runekit.cluehelper.assets import ClueAssets
 
 if TYPE_CHECKING:
@@ -72,8 +73,25 @@ class _SolveThread(QThread):
                 self.ok.emit(lockbox_mod.LockboxSolution(read, sol[0], sol[1]))
                 return
 
-            if title in ("towers", "celtic knot"):
-                self.failed.emit(f"Found a {title} puzzle; that type isn't supported yet.")
+            if title == "towers":
+                read = towers_mod.read_towers(arr, assets)
+                if read is None:
+                    self.failed.emit(
+                        "Towers puzzle detected but the clues could not be read.\n"
+                        "Make sure the whole board is visible and try again."
+                    )
+                    return
+                sols = towers_mod.solve_towers(read, limit=2)
+                if not sols:
+                    self.failed.emit(
+                        "Towers clues read but no solution exists; likely a misread. Try again."
+                    )
+                    return
+                self.ok.emit(towers_mod.TowersSolution(read, sols[0], len(sols)))
+                return
+
+            if title == "celtic knot":
+                self.failed.emit("Found a celtic knot puzzle; that type isn't supported yet.")
                 return
 
             board = slide_mod.read_slide(arr, assets)
@@ -226,6 +244,23 @@ class ClueHelper(QObject):
         )
         msg.exec()
 
+    def _show_towers(self, sol: "towers_mod.TowersSolution"):
+        s = sol.read.scale
+        ix, iy = sol.read.inner_origin
+        origin = (ix + 27 * s, iy + 27.5 * s)
+        drew = self._draw_grid_numbers(origin, 44 * s, sol.grid, color=QColor(120, 235, 120))
+        msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
+        text = f"Towers puzzle solved (confidence {sol.read.confidence:.0%})."
+        if sol.solutions > 1:
+            text += "\n\nThe visible clues allow more than one solution; showing one. Fill a few cells and solve again to narrow it."
+        if drew:
+            text += "\n\nThe solution is drawn on the game."
+        msg.setText(text)
+        msg.setDetailedText(
+            "Solution:\n" + "\n".join(" ".join(str(v) for v in row) for row in sol.grid)
+        )
+        msg.exec()
+
     @Slot(object)
     def on_result(self, result):
         if isinstance(result, slide_mod.SlideSolution):
@@ -233,6 +268,9 @@ class ClueHelper(QObject):
             return
         if isinstance(result, lockbox_mod.LockboxSolution):
             self._show_lockbox(result)
+            return
+        if isinstance(result, towers_mod.TowersSolution):
+            self._show_towers(result)
             return
         msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
         msg.setDetailedText(

@@ -90,6 +90,31 @@ class ClueAssets:
             self._extract_needles()
         return np.asarray(Image.open(path).convert("RGBA")).astype(np.int32)
 
+    def _extract_fonts(self):
+        """The bundle inlines its OCR fonts as JSON.parse('...') in a fixed
+        order: smallcaps 9px, chatbox 12pt, chatbox 14pt."""
+        import json
+
+        src = self._fetch(BUNDLE_URL, self.dir / "app.bundle.js").read_text()
+        names = ["font_allcaps9", "font_chat12", "font_chat14"]
+        count = 0
+        for name, m in zip(names, re.finditer(r"JSON\.parse\('(\{\"chars\".*?)'\)", src, re.S)):
+            blob = m.group(1).encode().decode("unicode_escape")
+            (self.dir / f"{name}.json").write_text(json.dumps(json.loads(blob)))
+            count += 1
+        if count != 3:
+            raise RuntimeError(
+                f"Expected 3 fonts in the runeapps bundle, found {count}; bundle layout changed"
+            )
+
+    def font(self, name: str) -> dict:
+        import json
+
+        path = self.dir / f"{name}.json"
+        if not path.exists():
+            self._extract_fonts()
+        return json.loads(path.read_text())
+
     def slide_theme(self, letter: str) -> np.ndarray:
         filename = SLIDE_THEMES[letter]
         path = self._fetch(
