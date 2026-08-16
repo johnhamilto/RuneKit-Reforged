@@ -174,6 +174,33 @@ Or add apps through the Settings UI:
 
 ---
 
+## Built-in Clue Solver (macOS)
+
+Alt1 apps detect the game by exact pixel matching, which breaks on Retina
+displays and scaled interfaces, so the runeapps Clue Solver cannot work on
+most Mac setups. RuneKit ships its own scale-tolerant solver instead: open
+the clue or puzzle in game, click the tray icon, and choose **Solve Clue on
+Screen**.
+
+| Clue type | Support |
+|---|---|
+| Text clues (simple, cryptic, anagram, emote, action) | Solved with answer and location |
+| Coordinate clues | Solved; snapped to the known dig spot with dungeon level |
+| Map clues | Identified by image signature; answer and dig spot shown |
+| Scan clues | Area identified; dig spots listed |
+| Slide puzzles | Board read and solved; clicks numbered on the game overlay |
+| Lockbox | Solved; press counts drawn on each tile |
+| Towers | Solved; the completed grid is drawn into the cells |
+| Compass | Needle read; walking bearing shown (no auto-triangulation yet) |
+| Celtic knot | Not supported yet |
+
+Reading text uses the macOS Vision framework, so this feature is
+macOS-only. Reference data (clue database, sprites) is fetched from
+runeapps.org on first use and cached locally. Solving takes a few seconds
+to about a minute depending on the clue type.
+
+---
+
 ## Troubleshooting
 
 ### "No game instance found"
