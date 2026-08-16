@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from runekit import detection
+from runekit.cluehelper import lockbox as lockbox_mod
 from runekit.cluehelper import slide as slide_mod
 from runekit.cluehelper import slide_solver, solver
 from runekit.cluehelper.assets import ClueAssets
@@ -34,6 +35,13 @@ class _SolveThread(QThread):
         self.instance = instance
         self.cache_dir = cache_dir
 
+    def _puzzle_title(self, result) -> str:
+        for line in result.lines:
+            for title in ("lockbox", "towers", "celtic knot"):
+                if solver._ratio(line["text"], title) >= 0.75:
+                    return title
+        return ""
+
     def run(self):
         try:
             frame = self.instance.grab_game()
@@ -43,7 +51,32 @@ class _SolveThread(QThread):
                 self.ok.emit(result)
                 return
 
-            board = slide_mod.read_slide(detection.to_array(frame), ClueAssets(self.cache_dir))
+            arr = detection.to_array(frame)
+            assets = ClueAssets(self.cache_dir)
+            title = self._puzzle_title(result)
+
+            if title == "lockbox":
+                read = lockbox_mod.read_lockbox(arr, assets)
+                if read is None:
+                    self.failed.emit(
+                        "Lockbox detected but the grid could not be read.\n"
+                        "Make sure the whole box is visible and try again."
+                    )
+                    return
+                sol = lockbox_mod.solve_lockbox(read.grid)
+                if sol is None:
+                    self.failed.emit(
+                        "Lockbox grid read but no solution exists; likely a misread. Try again."
+                    )
+                    return
+                self.ok.emit(lockbox_mod.LockboxSolution(read, sol[0], sol[1]))
+                return
+
+            if title in ("towers", "celtic knot"):
+                self.failed.emit(f"Found a {title} puzzle; that type isn't supported yet.")
+                return
+
+            board = slide_mod.read_slide(arr, assets)
             if board is not None:
                 try:
                     moves = slide_solver.solve(board.board)
@@ -138,10 +171,68 @@ class ClueHelper(QObject):
         )
         msg.exec()
 
+    def _draw_grid_numbers(self, origin, stride, values, color=QColor(255, 220, 80)) -> bool:
+        """Draw per-cell numbers over a 5x5 grid on the game overlay."""
+        try:
+            area = self._instance.get_overlay_area()
+        except Exception:
+            return False
+        if area is None:
+            return False
+
+        ox, oy = origin
+        items = []
+        for r in range(5):
+            for c in range(5):
+                value = values[r][c]
+                if not value:
+                    continue
+                cx = ox + (c + 0.5) * stride
+                cy = oy + (r + 0.5) * stride
+                label = QGraphicsSimpleTextItem(str(value))
+                label.setBrush(QBrush(color))
+                label.setPen(QPen(QColor(0, 0, 0), 0.5))
+                label.setFont(QFont("Verdana", 14, QFont.Weight.Bold))
+                rect = label.boundingRect()
+                label.setPos(cx - rect.width() / 2, cy - rect.height() / 2)
+                label.setParentItem(area)
+                items.append(label)
+
+        def cleanup():
+            for item in items:
+                scene = item.scene()
+                if scene is not None:
+                    scene.removeItem(item)
+
+        QTimer.singleShot(OVERLAY_TIMEOUT_MS, cleanup)
+        return True
+
+    def _show_lockbox(self, sol: "lockbox_mod.LockboxSolution"):
+        stride = lockbox_mod.TILE * sol.read.scale
+        drew = self._draw_grid_numbers(sol.read.origin, stride, sol.presses)
+        total = sum(map(sum, sol.presses))
+        msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
+        text = (
+            f"Lockbox read (confidence {sol.read.confidence:.0%}).\n\n"
+            f"{total} presses to make every tile "
+            f"{lockbox_mod.TILE_NAMES[sol.target]}."
+        )
+        if drew:
+            text += "\n\nPress each tile the number of times shown on the game."
+        msg.setText(text)
+        msg.setDetailedText(
+            "Press counts per tile (row by row):\n"
+            + "\n".join(" ".join(str(v) for v in row) for row in sol.presses)
+        )
+        msg.exec()
+
     @Slot(object)
     def on_result(self, result):
         if isinstance(result, slide_mod.SlideSolution):
             self._show_slide(result)
+            return
+        if isinstance(result, lockbox_mod.LockboxSolution):
+            self._show_lockbox(result)
             return
         msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
         msg.setDetailedText(
