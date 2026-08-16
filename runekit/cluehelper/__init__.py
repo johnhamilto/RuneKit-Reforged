@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from runekit import detection
+from runekit.cluehelper import compass as compass_mod
 from runekit.cluehelper import lockbox as lockbox_mod
 from runekit.cluehelper import maps as maps_mod
 from runekit.cluehelper import slide as slide_mod
@@ -115,6 +116,11 @@ class _SolveThread(QThread):
                     )
                     return
                 self.ok.emit(slide_mod.SlideSolution(board, moves))
+                return
+
+            comp = compass_mod.read_compass(arr, assets)
+            if comp is not None:
+                self.ok.emit(comp)
                 return
 
             self.ok.emit(result)
@@ -281,6 +287,16 @@ class ClueHelper(QObject):
             return
         if isinstance(result, towers_mod.TowersSolution):
             self._show_towers(result)
+            return
+        if isinstance(result, compass_mod.CompassRead):
+            QMessageBox.information(
+                None,
+                "Clue Solver",
+                f"Compass clue: walk {result.wind} "
+                f"(bearing {result.bearing_deg:.0f}\N{DEGREE SIGN}).\n\n"
+                "Move a good distance, then solve again to re-read the needle.\n"
+                "Automatic triangulation isn't supported yet.",
+            )
             return
         msg = QMessageBox(QMessageBox.Icon.Information, "Clue Solver", "")
         msg.setDetailedText(

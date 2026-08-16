@@ -103,6 +103,11 @@ def describe(entry: dict) -> str:
 
     if kind == "scan":
         parts.append(f"Scan area: {entry.get('scan', 'unknown')}")
+        spots = entry.get("scan_spots") or []
+        if spots:
+            listed = ", ".join(f"({s['x']},{s['z']})" for s in spots[:8])
+            more = f" and {len(spots) - 8} more" if len(spots) > 8 else ""
+            parts.append(f"Dig spots ({len(spots)}): {listed}{more}")
     answer = entry.get("answer")
     if answer:
         parts.append(f"Answer: {answer}")
@@ -210,4 +215,11 @@ def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
         result.status = "solved"
     elif best >= LOW_RATIO:
         result.status = "low_confidence"
+
+    if result.matches and result.matches[0][1].get("type") == "scan":
+        entry = dict(result.matches[0][1])
+        entry["scan_spots"] = [
+            c for c in dbs["coords"] if c.get("clueid") == entry.get("scan")
+        ]
+        result.matches[0] = (result.matches[0][0], entry)
     return result
