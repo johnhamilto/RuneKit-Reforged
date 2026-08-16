@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from runekit import detection
 from runekit.cluehelper import lockbox as lockbox_mod
+from runekit.cluehelper import maps as maps_mod
 from runekit.cluehelper import slide as slide_mod
 from runekit.cluehelper import slide_solver, solver
 from runekit.cluehelper import towers as towers_mod
@@ -48,6 +49,15 @@ class _SolveThread(QThread):
             frame = self.instance.grab_game()
             dbs = solver.load_databases(self.cache_dir)
             result = solver.solve_frame(frame, dbs)
+            if result.status == "unsupported":
+                # a clue interface with no matchable text: try image matching
+                match = maps_mod.read_map_clue(detection.to_array(frame), dbs, ClueAssets(self.cache_dir))
+                if match is not None:
+                    result.status = "solved"
+                    result.read_text = "(map image)"
+                    result.matches = [(1.0, match.entry)]
+                self.ok.emit(result)
+                return
             if result.status != "no_clue":
                 self.ok.emit(result)
                 return
