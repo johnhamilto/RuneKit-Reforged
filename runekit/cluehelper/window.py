@@ -175,6 +175,7 @@ class ClueSolverWindow(QWidget):
         layout.addWidget(self.solve_button)
 
         self.status = QLabel("Open a clue or puzzle in game, then solve.")
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 

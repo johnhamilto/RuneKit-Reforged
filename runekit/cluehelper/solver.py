@@ -164,7 +164,9 @@ def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
     if title is None:
         return SolveResult(status="no_clue", lines=lines)
 
-    # clue body: lines below the title, roughly centered on it. Vision boxes
+    # clue body: lines below the title. Scroll text is centered in the modal,
+    # so real body lines sit on the title's center; the gate scales with the
+    # title width so it tracks the modal size at any window size. Vision boxes
     # are normalized with origin at the bottom left.
     tx, ty, tw, th = title["box"]
     tcx = tx + tw / 2
@@ -174,7 +176,7 @@ def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
             continue
         x, y, w, h = line["box"]
         below = y + h <= ty + th * 0.5
-        near = abs((x + w / 2) - tcx) < 0.3 and y > ty - 0.35
+        near = abs((x + w / 2) - tcx) < max(tw, 0.05) and y > ty - 0.35
         if below and near:
             body.append(line)
 
@@ -197,18 +199,26 @@ def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
         result.matches = [(1.0 if entry.get("known_spot") else 0.9, entry)]
         return result
 
-    # The clue text is the top run of lines; anything below it (tooltips, game
-    # UI) hurts the match. Score every prefix and keep the best one.
-    candidates = [
-        e for e in dbs["clues"]
+    # The clue is one contiguous run of lines; neighbouring UI text (task
+    # lists, tooltips) that slips into the body hurts the match. Score every
+    # span of up to six lines and keep the best one.
+    matchers = [
+        (difflib.SequenceMatcher(None, "", clue_text(e).lower().strip()), e)
+        for e in dbs["clues"]
         if (e.get("type") in TEXT_TYPES or e.get("type") == "scan") and clue_text(e)
     ]
-    for k in range(1, len(body) + 1):
-        read = " ".join(l["text"] for l in body[:k]).strip()
-        scored = sorted(((_ratio(read, clue_text(e)), e) for e in candidates), key=lambda t: -t[0])
-        if not result.matches or scored[0][0] > result.matches[0][0]:
-            result.matches = scored[:3]
-            result.read_text = read
+    for i in range(len(body)):
+        for j in range(i + 1, min(i + 6, len(body)) + 1):
+            read = " ".join(l["text"] for l in body[i:j]).strip()
+            key = read.lower()
+            scored = []
+            for m, e in matchers:
+                m.set_seq1(key)
+                scored.append((m.ratio(), e))
+            scored.sort(key=lambda t: -t[0])
+            if not result.matches or scored[0][0] > result.matches[0][0]:
+                result.matches = scored[:3]
+                result.read_text = read
 
     best = result.matches[0][0] if result.matches else 0.0
     if best >= SOLVED_RATIO:

@@ -359,9 +359,9 @@ class ClueHelper(QObject):
             )
             return
         if result.status == "unsupported":
-            text = f"Found “{html.escape(result.title)}” but couldn't match the clue."
+            text = f"Found “{result.title}” but couldn't match the clue."
             if result.read_text:
-                text += f" Read: “{html.escape(result.read_text)}”"
+                text += f" Read: “{result.read_text}”"
             self.window.show_message(text, _ocr_details(result))
             return
 
