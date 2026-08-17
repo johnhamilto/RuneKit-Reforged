@@ -83,6 +83,8 @@ def load_databases(cache_dir: Path) -> dict:
 
 
 def clue_text(entry: dict) -> str:
+    if entry.get("type") in ("img", "emptyimg"):
+        return ""  # the clue field holds an image signature, not text
     clue = entry.get("scantext") if entry.get("type") == "scan" else entry.get("clue")
     if isinstance(clue, list):
         clue = " ".join(str(s) for s in clue)
