@@ -40,13 +40,20 @@ SCREEN_WIDTH = 1700  # frames are shrunk to this for fast screening
 
 
 def _title_match(text: str, title: str, fuzzy: float) -> bool:
-    """Match an OCR line against an interface title. Long titles tolerate OCR
-    noise; short ones ("towers") need a near-exact, same-word-count match so
-    stray words like a "Tower" map label can't route or trigger."""
+    """Match an OCR line against an interface title. Long titles tolerate
+    heavy OCR noise but must span at least two words of it, so a lone word
+    like "TREASURE" can't trigger; short ones ("towers") need a near-exact,
+    same-word-count match so a "Tower" map label can't route."""
     key = solver._matchkey(text)
     tkey = solver._matchkey(title)
-    if len(tkey) >= 12:  # "treasure map" and longer tolerate OCR noise
-        return solver._ratio(key, tkey) >= fuzzy
+    if len(tkey) >= 12:
+        words, twords = key.split(), tkey.split()
+        return (
+            len(words) >= min(2, len(twords))
+            and len(words) >= len(twords) - 1
+            and len(key) >= 0.6 * len(tkey)
+            and solver._ratio(key, tkey) >= fuzzy
+        )
     return (
         len(key) >= len(tkey)
         and len(key.split()) == len(tkey.split())
@@ -85,10 +92,25 @@ class _ScanThread(QThread):
                 )
             else:
                 frame_small = frame
-            for line in vision.ocr_lines(frame_small, fast=True):
-                if any(_title_match(line["text"], t, 0.82) for t in SCREEN_TITLES):
-                    self.verdict.emit(True)
-                    return
+            lines = vision.ocr_lines(frame_small, fast=True)
+            best = (0.0, "", "")
+            for line in lines:
+                for t in SCREEN_TITLES:
+                    r = solver._ratio(solver._matchkey(line["text"]), solver._matchkey(t))
+                    if r > best[0]:
+                        best = (r, line["text"], t)
+            hit = any(
+                _title_match(line["text"], t, 0.7)
+                for line in lines for t in SCREEN_TITLES
+            )
+            logger.log(
+                logging.INFO if hit or self._runs % 15 == 1 else logging.DEBUG,
+                "Screening #%d: %d lines, best %r vs %r (%.2f), hit=%s",
+                self._runs, len(lines), best[1], best[2], best[0], hit,
+            )
+            if hit:
+                self.verdict.emit(True)
+                return
             # slide puzzles have no title; probe for the interface sprite.
             # Cheap with a scale hint, so do the full sweep only occasionally
             # until one is known.
