@@ -187,6 +187,11 @@ def read_slide(frame, assets: ClueAssets, hint: Optional[float] = None,
         return None
 
     result = attempt(0, 0, ranking[0][1])
+    if result is None and m.zncc < 0.9:
+        # the anchor sprite is just a close button; a weak match is almost
+        # certainly some other interface's X, not worth the origin sweep
+        logger.info("Slide anchor weak (zncc %.2f) and nominal read failed; giving up", m.zncc)
+        return None
     if result is None:
         sweep = range(-ORIGIN_SWEEP, ORIGIN_SWEEP + 1, 7)
         candidates = []
@@ -210,6 +215,8 @@ def read_slide(frame, assets: ClueAssets, hint: Optional[float] = None,
             try:
                 path = str(debug_dir) + "/debug_slide_reject.png"
                 Image.fromarray(norm[:, :, :3].astype(np.uint8)).save(path)
+                half = Image.fromarray(frame[:, :, :3].astype(np.uint8)).reduce(2)
+                half.convert("RGB").save(str(debug_dir) + "/debug_slide_frame.jpg", quality=70)
                 logger.info("Saved rejected slide board crop to %s", path)
             except Exception:
                 pass

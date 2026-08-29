@@ -81,7 +81,9 @@ class _ScanThread(QThread):
             if hint or self._runs % 8 == 1:
                 needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
                 m = detection.calibrate_scale(detection.to_array(frame), needle, hint=hint)
-                if m.ok:
+                # the sprite is just a close button; other interfaces' X
+                # buttons score up to ~0.85, a real slide modal ~0.99
+                if m.ok and m.zncc >= 0.9:
                     self.verdict.emit(True)
                     return
             self.verdict.emit(False)
@@ -186,7 +188,7 @@ class _SolveThread(QThread):
 
             if title == "towers":
                 self.progress.emit("Reading the towers board…")
-                read = towers_mod.read_towers(arr, assets, hint=hint)
+                read = towers_mod.read_towers(arr, assets, hint=hint, debug_dir=self.cache_dir)
                 if read is None:
                     self.failed.emit(
                         "Towers puzzle detected but the clues could not be read. "
@@ -272,6 +274,7 @@ class ClueHelper(QObject):
         self._auto_armed = True
         self._auto_misses = 0
         self._auto_last = 0.0
+        self._auto_penalty = AUTO_COOLDOWN_S
         self._scan_thread = None
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(AUTO_INTERVAL_MS)
@@ -323,7 +326,7 @@ class ClueHelper(QObject):
                 self._auto_armed = True
             return
         self._auto_misses = 0
-        if not self._auto_armed or time.time() - self._auto_last < AUTO_COOLDOWN_S:
+        if not self._auto_armed or time.time() - self._auto_last < self._auto_penalty:
             return
         instance = self.instance_provider() if self.instance_provider else None
         if instance is None:
@@ -566,8 +569,22 @@ class ClueHelper(QObject):
         # keep auto re-reading while the knot stays open so rotations update
         self._auto_armed = True
 
+    def _auto_outcome(self, productive: bool):
+        """Escalating cooldown for fruitless auto solves so a persistent
+        false trigger can't grind the machine; any real result resets it."""
+        if not self._auto_solving:
+            return
+        if productive:
+            self._auto_penalty = AUTO_COOLDOWN_S
+        else:
+            self._auto_penalty = min(self._auto_penalty * 2, 120)
+
     @Slot(object)
     def on_result(self, result):
+        if isinstance(result, solver.SolveResult) and result.status in ("no_clue", "unsupported"):
+            self._auto_outcome(False)
+        else:
+            self._auto_outcome(True)
         if isinstance(result, slide_mod.SlideSolution):
             self._show_slide(result)
         elif isinstance(result, lockbox_mod.LockboxSolution):
@@ -583,4 +600,5 @@ class ClueHelper(QObject):
 
     @Slot(str)
     def on_failed(self, message: str):
+        self._auto_outcome(False)
         self.window.show_message(message)

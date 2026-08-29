@@ -88,7 +88,8 @@ class _DigitTemplates:
         return best_digit, best_score
 
 
-def read_towers(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optional[TowersRead]:
+def read_towers(frame, assets: ClueAssets, hint: Optional[float] = None,
+                debug_dir: Optional[object] = None) -> Optional[TowersRead]:
     frame = detection.to_array(frame)
     exitbtn = detection.to_array(assets.needle("exitbutton"))
     topleft = detection.to_array(assets.needle("topleft"))
@@ -132,7 +133,6 @@ def read_towers(frame, assets: ClueAssets, hint: Optional[float] = None) -> Opti
             return digits.classify(norm, PAD + x, PAD + y, GOLD)
 
         reads = []
-        scores = []
         for a in range(5):
             reads.append(edge(43 + 44 * a, 14))
         for a in range(5):
@@ -160,13 +160,20 @@ def read_towers(frame, assets: ClueAssets, hint: Optional[float] = None) -> Opti
                 inner_origin=(int(round(inner_x)), int(round(inner_y))),
                 confidence=conf,
             )
-            best = (conf, min(scores), read)
+            best = (conf, min(scores), read, norm)
 
     if best is None:
         return None
-    conf, min_score, read = best
+    conf, min_score, read, norm = best
     if min_score < 0.35 or conf < EDGE_MIN:
         logger.info("Towers read rejected: min %.2f mean %.2f", min_score, conf)
+        if debug_dir is not None:
+            try:
+                path = str(debug_dir) + "/debug_towers_reject.png"
+                Image.fromarray(norm[:, :, :3].astype(np.uint8)).save(path)
+                logger.info("Saved rejected towers crop to %s", path)
+            except Exception:
+                pass
         return None
     return read
 
