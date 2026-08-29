@@ -196,7 +196,7 @@ the RuneScape Wiki, and a world map with the target marked.
 | Lockbox | Solved; press counts drawn on each tile |
 | Towers | Solved; the completed grid is drawn into the cells |
 | Compass | Needle read; walking bearing shown (no auto-triangulation yet) |
-| Celtic knot | Not supported yet |
+| Celtic knot | Rings read and solved; hidden runes fill in from a second look after "Invert paths" (experimental) |
 
 Reading text uses the macOS Vision framework, so this feature is
 macOS-only. Reference data (clue databases, sprites, map tiles) is fetched

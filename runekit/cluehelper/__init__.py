@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsSimpleTextItem
 
 from runekit import detection
 from runekit.cluehelper import compass as compass_mod
+from runekit.cluehelper import knot as knot_mod
 from runekit.cluehelper import lockbox as lockbox_mod
 from runekit.cluehelper import maps as maps_mod
 from runekit.cluehelper import slide as slide_mod
@@ -203,7 +204,16 @@ class _SolveThread(QThread):
                 return
 
             if title == "celtic knot":
-                self.failed.emit("Found a celtic knot puzzle; that type isn't supported yet.")
+                self.progress.emit("Reading the celtic knot…")
+                state = knot_mod.read_knot(arr, assets, hint=hint, debug_dir=self.cache_dir)
+                if state is None:
+                    self.failed.emit(
+                        "Celtic knot detected but the rings could not be mapped. "
+                        "Make sure the whole knot is visible and try again."
+                    )
+                    return
+                self._save_hint(state.scale)
+                self.ok.emit(state)
                 return
 
             self.progress.emit("Looking for a slide puzzle…")
@@ -256,6 +266,7 @@ class ClueHelper(QObject):
         self._thread = None
         self._instance = None
         self._window = None
+        self._knot_prev = None
         self.instance_provider = None  # set by the host; returns a GameInstance
         self._auto_solving = False
         self._auto_armed = True
@@ -520,6 +531,40 @@ class ClueHelper(QObject):
             f"{prefix}Clue matched ({ratio:.0%}).", body, pixmap, _ocr_details(result)
         )
 
+    def _show_knot(self, state: "knot_mod.KnotState"):
+        self._knot_prev = knot_mod.merge_states(self._knot_prev, state)
+        state = self._knot_prev
+        solutions = knot_mod.solve_knot(state)
+        best = knot_mod.pick_solution(solutions)
+        pixmap = window_mod.render_knot(state.paths, state.intersections)
+        if best is None:
+            body = (
+                f"{len(solutions)} candidate solutions; the hidden runes at the "
+                "crossings leave it ambiguous.<br><b>Click “Invert paths” in the "
+                "puzzle and solve again</b> (automatic with auto-detect on) to "
+                "read the hidden runes."
+            )
+            self.window.show_result("Celtic knot: need one more look.", body, pixmap)
+        else:
+            lines = []
+            for ring, off in enumerate(best.offsets):
+                length = len(state.paths[ring])
+                if not length or off == 0:
+                    continue
+                fwd, back = off, length - off
+                name = knot_mod.RING_NAMES.get(ring, str(ring))
+                steps = min(fwd, back)
+                lines.append(
+                    f"<b>{name.capitalize()} ring</b>: rotate {steps} "
+                    f"step{'s' if steps != 1 else ''} "
+                    f"({f'{fwd} one way or {back} the other' if fwd != back else 'either way'})"
+                )
+            body = "<br>".join(lines) if lines else "Already solved as shown."
+            note = "" if best.sure else " (best remaining candidate)"
+            self.window.show_result(f"Celtic knot solved{note}.", body, pixmap)
+        # keep auto re-reading while the knot stays open so rotations update
+        self._auto_armed = True
+
     @Slot(object)
     def on_result(self, result):
         if isinstance(result, slide_mod.SlideSolution):
@@ -530,6 +575,8 @@ class ClueHelper(QObject):
             self._show_towers(result)
         elif isinstance(result, compass_mod.CompassRead):
             self._show_compass(result)
+        elif isinstance(result, knot_mod.KnotState):
+            self._show_knot(result)
         else:
             self._show_text_result(result)
 

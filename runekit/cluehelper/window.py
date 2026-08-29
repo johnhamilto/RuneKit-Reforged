@@ -131,6 +131,68 @@ def render_towers(grid: List[List[int]], filled: List[List[int]],
                       Qt.TransformationMode.SmoothTransformation)
 
 
+KNOT_RING_COLORS = {
+    0: QColor(90, 120, 235),
+    1: QColor(235, 180, 40),
+    2: QColor(90, 90, 100),
+    3: QColor(200, 200, 205),
+}
+
+
+def render_knot(paths, intersections, offsets=None) -> QPixmap:
+    """Diagram of the read knot: one diamond per slot, colored per ring,
+    rune ids as numbers, crossings split-colored."""
+    from PySide6.QtGui import QBrush, QPolygonF
+    from PySide6.QtCore import QPointF
+
+    half = 11
+    pts = [(s.x, s.y) for p in paths for s in p]
+    if not pts:
+        return QPixmap(1, 1)
+    xs = [half * (t - n) for t, n in pts]
+    ys = [-half * (t + n) for t, n in pts]
+    x0, y0 = min(xs) - 2 * half, min(ys) - 2 * half
+    w = int(max(xs) - x0 + 2 * half)
+    h = int(max(ys) - y0 + 2 * half)
+    pix = QPixmap(w, h)
+    pix.fill(QColor(30, 26, 22))
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    crossing_at = {(i["x"], i["y"]): i for i in intersections}
+
+    def center(t, n):
+        return (half * (t - n) - x0, -half * (t + n) - y0)
+
+    for ring, path in enumerate(paths):
+        for i, slot in enumerate(path):
+            cx, cy = center(slot.x, slot.y)
+            inter = crossing_at.get((slot.x, slot.y))
+            is_under = inter is not None and inter.get("col2") == ring and inter.get("col1") != ring
+            if is_under:
+                continue  # drawn by the ring on top
+            diamond = QPolygonF([
+                QPointF(cx, cy - half), QPointF(cx + half, cy),
+                QPointF(cx, cy + half), QPointF(cx - half, cy),
+            ])
+            painter.setPen(QPen(QColor(15, 13, 11), 1))
+            painter.setBrush(QBrush(KNOT_RING_COLORS.get(ring, QColor(150, 150, 150))))
+            painter.drawPolygon(diamond)
+            if inter is not None and inter.get("col2") is not None:
+                other = inter["col2"] if inter.get("col1") == ring else inter.get("col1")
+                painter.setBrush(QBrush(KNOT_RING_COLORS.get(other, QColor(150, 150, 150))))
+                painter.drawPolygon(QPolygonF([
+                    QPointF(cx, cy + half), QPointF(cx - half, cy), QPointF(cx, cy - half),
+                ]))
+            rune = slot.rune
+            if rune >= 0:
+                _draw_number(painter, cx - 4, cy + 4, str(rune), QColor(255, 255, 255), size=8)
+            elif rune != -10000:
+                _draw_number(painter, cx - 4, cy + 4, "?", QColor(255, 160, 160), size=8)
+    painter.end()
+    return pix
+
+
 def render_compass(bearing_deg: float) -> QPixmap:
     import math
 
