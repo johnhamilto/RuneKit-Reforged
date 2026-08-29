@@ -20,7 +20,9 @@ class OcrLine(TypedDict):
     box: Tuple[float, float, float, float]
 
 
-def ocr_lines(image: Image.Image) -> List[OcrLine]:
+def ocr_lines(image: Image.Image, fast: bool = False) -> List[OcrLine]:
+    """fast trades accuracy for a several-fold speedup; good enough to spot
+    interface titles when screening frames."""
     if not HAS_VISION:
         raise RuntimeError(
             "Text recognition requires the macOS Vision framework (pyobjc-framework-Vision)"
@@ -33,7 +35,11 @@ def ocr_lines(image: Image.Image) -> List[OcrLine]:
     cgimg = Quartz.CGImageSourceCreateImageAtIndex(src, 0, None)
 
     request = Vision.VNRecognizeTextRequest.alloc().init()
-    request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+    if fast:
+        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelFast)
+        request.setUsesLanguageCorrection_(False)
+    else:
+        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
     handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cgimg, None)
     ok, error = handler.performRequests_error_([request], None)
     if not ok:

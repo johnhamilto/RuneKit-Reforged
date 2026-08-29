@@ -180,7 +180,11 @@ Alt1 apps detect the game by exact pixel matching, which breaks on Retina
 displays and scaled interfaces, so the runeapps Clue Solver cannot work on
 most Mac setups. RuneKit ships its own scale-tolerant solver instead: open
 the clue or puzzle in game, click the tray icon, and choose **Solve Clue on
-Screen**.
+Screen**. Tick **Detect clues automatically** in the solver window and it
+watches the screen and solves clues as you open them.
+
+Solved clues show the answer, the solution and fastest travel route from
+the RuneScape Wiki, and a world map with the target marked.
 
 | Clue type | Support |
 |---|---|
@@ -195,9 +199,10 @@ Screen**.
 | Celtic knot | Not supported yet |
 
 Reading text uses the macOS Vision framework, so this feature is
-macOS-only. Reference data (clue database, sprites) is fetched from
-runeapps.org on first use and cached locally. Solving takes a few seconds
-to about a minute depending on the clue type.
+macOS-only. Reference data (clue databases, sprites, map tiles) is fetched
+from runeapps.org and the RuneScape Wiki on first use and cached locally;
+none of it ships with RuneKit. Solving takes a few seconds to about a
+minute depending on the clue type.
 
 ---
 

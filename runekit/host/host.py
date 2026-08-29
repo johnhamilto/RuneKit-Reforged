@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from PySide6.QtCore import Slot, QCoreApplication
 from PySide6.QtWidgets import QMessageBox
@@ -39,6 +39,7 @@ class Host:
         self.tray_icon.on_settings.connect(self.open_settings)
         self.tray_icon.on_solve_clue.connect(self.solve_clue)
         self.clue_helper.solve_requested.connect(self.solve_clue)
+        self.clue_helper.instance_provider = self._clue_instance
         self.manager.instance_removed.connect(self.on_game_quit)
 
     def on_before_quit(self):
@@ -107,19 +108,21 @@ class Host:
         self.setting_dialog.show()
         self.setting_dialog.raise_()
 
-    @Slot()
-    def solve_clue(self):
+    def _clue_instance(self) -> Optional["GameInstance"]:
         instance = self.manager.get_active_instance()
-
         if not instance:
             instances = self.manager.get_instances()
-            if not instances:
-                self.clue_helper.show_error(
-                    "Cannot find an open RuneScape window. Launch the game first."
-                )
-                return
+            instance = instances[0] if instances else None
+        return instance
 
-            instance = instances[0]
+    @Slot()
+    def solve_clue(self):
+        instance = self._clue_instance()
+        if not instance:
+            self.clue_helper.show_error(
+                "Cannot find an open RuneScape window. Launch the game first."
+            )
+            return
 
         self.clue_helper.solve(instance)
 

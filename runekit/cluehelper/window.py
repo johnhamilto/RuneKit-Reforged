@@ -6,6 +6,7 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QLabel,
     QPushButton,
     QTextBrowser,
@@ -157,6 +158,7 @@ def render_compass(bearing_deg: float) -> QPixmap:
 
 class ClueSolverWindow(QWidget):
     solve_requested = Signal()
+    auto_toggled = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
@@ -173,6 +175,10 @@ class ClueSolverWindow(QWidget):
         self.solve_button.setFont(font)
         self.solve_button.clicked.connect(self.solve_requested)
         layout.addWidget(self.solve_button)
+
+        self.auto_check = QCheckBox("Detect clues automatically")
+        self.auto_check.toggled.connect(self.auto_toggled)
+        layout.addWidget(self.auto_check)
 
         self.status = QLabel("Open a clue or puzzle in game, then solve.")
         self.status.setTextFormat(Qt.TextFormat.PlainText)

@@ -2,10 +2,12 @@
 import html
 import json
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QStandardPaths, QThread, QTimer, Signal, Slot
+from PIL import Image
+from PySide6.QtCore import QObject, QSettings, QStandardPaths, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QBrush, QColor, QFont, QPen
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsSimpleTextItem
 
@@ -14,7 +16,7 @@ from runekit.cluehelper import compass as compass_mod
 from runekit.cluehelper import lockbox as lockbox_mod
 from runekit.cluehelper import maps as maps_mod
 from runekit.cluehelper import slide as slide_mod
-from runekit.cluehelper import slide_solver, solver
+from runekit.cluehelper import slide_solver, solver, vision
 from runekit.cluehelper import towers as towers_mod
 from runekit.cluehelper import wiki as wiki_mod
 from runekit.cluehelper import window as window_mod
@@ -29,6 +31,58 @@ logger = logging.getLogger(__name__)
 OVERLAY_MOVES = 25
 OVERLAY_TIMEOUT_MS = 20000
 
+AUTO_INTERVAL_MS = 4000
+AUTO_COOLDOWN_S = 10
+AUTO_REARM_MISSES = 2
+SCREEN_TITLES = ("mysterious clue scroll", "treasure map", "lockbox", "towers", "celtic knot")
+SCREEN_WIDTH = 1700  # frames are shrunk to this for fast screening
+
+
+def _load_hint(cache_dir: Path):
+    try:
+        return json.loads((cache_dir / "scale_hint.json").read_text())["scale"]
+    except Exception:
+        return None
+
+
+class _ScanThread(QThread):
+    """Cheap screen check for a clue-like interface: fast OCR for known
+    titles at reduced resolution, plus a slide needle probe once a scale
+    hint exists."""
+
+    verdict = Signal(bool)
+
+    def __init__(self, cache_dir: Path, parent=None):
+        super().__init__(parent=parent)
+        self.instance = None
+        self.cache_dir = cache_dir
+
+    def run(self):
+        try:
+            frame = solver._to_image(self.instance.grab_game())
+            if frame.width > SCREEN_WIDTH:
+                frame_small = frame.resize(
+                    (SCREEN_WIDTH, round(frame.height * SCREEN_WIDTH / frame.width)),
+                    Image.BILINEAR,
+                )
+            else:
+                frame_small = frame
+            for line in vision.ocr_lines(frame_small, fast=True):
+                if max(solver._ratio(line["text"], t) for t in SCREEN_TITLES) >= 0.6:
+                    self.verdict.emit(True)
+                    return
+            hint = _load_hint(self.cache_dir)
+            if hint:
+                needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
+                m = detection.calibrate_scale(detection.to_array(frame), needle, hint=hint)
+                if m.ok:
+                    self.verdict.emit(True)
+                    return
+            self.verdict.emit(False)
+        except Exception:
+            logger.debug("Clue screening failed", exc_info=True)
+            self.verdict.emit(False)
+
 
 class _SolveThread(QThread):
     ok = Signal(object)
@@ -40,18 +94,12 @@ class _SolveThread(QThread):
         self.instance = instance
         self.cache_dir = cache_dir
 
-    def _hint_path(self) -> Path:
-        return self.cache_dir / "scale_hint.json"
-
     def _load_hint(self):
-        try:
-            return json.loads(self._hint_path().read_text())["scale"]
-        except Exception:
-            return None
+        return _load_hint(self.cache_dir)
 
     def _save_hint(self, scale: float):
         try:
-            self._hint_path().write_text(json.dumps({"scale": scale}))
+            (self.cache_dir / "scale_hint.json").write_text(json.dumps({"scale": scale}))
         except Exception:
             pass
 
@@ -199,24 +247,83 @@ class ClueHelper(QObject):
         self._thread = None
         self._instance = None
         self._window = None
+        self.instance_provider = None  # set by the host; returns a GameInstance
+        self._auto_solving = False
+        self._auto_armed = True
+        self._auto_misses = 0
+        self._auto_last = 0.0
+        self._scan_thread = None
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(AUTO_INTERVAL_MS)
+        self._auto_timer.timeout.connect(self._auto_tick)
+        if QSettings().value("cluehelper/auto_detect", False, bool):
+            self._auto_timer.start()
 
     @property
     def window(self) -> "window_mod.ClueSolverWindow":
         if self._window is None:
             self._window = window_mod.ClueSolverWindow()
             self._window.solve_requested.connect(self.solve_requested)
+            self._window.auto_check.setChecked(self._auto_timer.isActive())
+            self._window.auto_toggled.connect(self.set_auto_detect)
         return self._window
 
     def show_error(self, message: str):
         self.window.open()
         self.window.show_message(message)
 
+    @Slot(bool)
+    def set_auto_detect(self, on: bool):
+        QSettings().setValue("cluehelper/auto_detect", on)
+        if on and not self._auto_timer.isActive():
+            self._auto_armed = True
+            self._auto_timer.start()
+        elif not on:
+            self._auto_timer.stop()
+
+    def _auto_tick(self):
+        if self._thread is not None and self._thread.isRunning():
+            return
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            return
+        instance = self.instance_provider() if self.instance_provider else None
+        if instance is None:
+            return
+        if self._scan_thread is None:
+            self._scan_thread = _ScanThread(self.cache_dir, parent=self)
+            self._scan_thread.verdict.connect(self._on_scan_verdict)
+        self._scan_thread.instance = instance
+        self._scan_thread.start()
+
+    @Slot(bool)
+    def _on_scan_verdict(self, found: bool):
+        if not found:
+            self._auto_misses += 1
+            if self._auto_misses >= AUTO_REARM_MISSES:
+                self._auto_armed = True
+            return
+        self._auto_misses = 0
+        if not self._auto_armed or time.time() - self._auto_last < AUTO_COOLDOWN_S:
+            return
+        instance = self.instance_provider() if self.instance_provider else None
+        if instance is None:
+            return
+        self._auto_armed = False
+        self._auto_last = time.time()
+        self.solve(instance, auto=True)
+
     @Slot()
-    def solve(self, instance: "GameInstance"):
-        self.window.open()
+    def solve(self, instance: "GameInstance", auto: bool = False):
+        if auto:
+            # update in place without stealing focus from the game
+            self.window.show()
+            self.window.raise_()
+        else:
+            self.window.open()
         if self._thread is not None and self._thread.isRunning():
             return
 
+        self._auto_solving = auto
         self._instance = instance
         self.window.set_busy(True, "Capturing the game…")
         self._thread = _SolveThread(instance, self.cache_dir, parent=self)
@@ -377,6 +484,10 @@ class ClueHelper(QObject):
 
     def _show_text_result(self, result: "solver.SolveResult"):
         if result.status == "no_clue":
+            if self._auto_solving:
+                # screening false positive; don't clobber whatever is shown
+                self.window.set_busy(False, "Watching for clues…")
+                return
             self.window.show_message(
                 "No clue interface found on screen. Open the clue scroll or puzzle and solve again.",
                 _ocr_details(result),
