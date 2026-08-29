@@ -17,6 +17,7 @@ from runekit.cluehelper import slide as slide_mod
 from runekit.cluehelper import slide_solver, solver
 from runekit.cluehelper import towers as towers_mod
 from runekit.cluehelper import window as window_mod
+from runekit.cluehelper import worldmap
 from runekit.cluehelper.assets import ClueAssets
 
 if TYPE_CHECKING:
@@ -60,6 +61,19 @@ class _SolveThread(QThread):
                     return title
         return ""
 
+    def _attach_map(self, result):
+        if not result.matches:
+            return
+        try:
+            spots, level, primary = solver.entry_spots(result.matches[0][1])
+            if spots:
+                self.progress.emit("Fetching the world map…")
+                result.map_image = worldmap.location_image(
+                    self.cache_dir, spots, level, primary=primary
+                )
+        except Exception:
+            logger.warning("World map snapshot failed", exc_info=True)
+
     def run(self):
         try:
             hint = self._load_hint()
@@ -75,9 +89,11 @@ class _SolveThread(QThread):
                     result.status = "solved"
                     result.read_text = "(map image)"
                     result.matches = [(1.0, match.entry)]
+                self._attach_map(result)
                 self.ok.emit(result)
                 return
             if result.status != "no_clue":
+                self._attach_map(result)
                 self.ok.emit(result)
                 return
 
@@ -369,8 +385,11 @@ class ClueHelper(QObject):
         prefix = "" if result.status == "solved" else "Low confidence match. "
         answer = html.escape(solver.describe(entry)).replace("\n", "<br>")
         body = f"<b>“{html.escape(solver.clue_text(entry) or result.read_text)}”</b><br><br>{answer}"
+        pixmap = None
+        if result.map_image is not None:
+            pixmap = window_mod.np_to_pixmap(result.map_image)
         self.window.show_result(
-            f"{prefix}Clue matched ({ratio:.0%}).", body, None, _ocr_details(result)
+            f"{prefix}Clue matched ({ratio:.0%}).", body, pixmap, _ocr_details(result)
         )
 
     @Slot(object)

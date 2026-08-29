@@ -52,10 +52,24 @@ class SolveResult:
     read_text: str = ""
     matches: List[Tuple[float, dict]] = field(default_factory=list)
     lines: List[vision.OcrLine] = field(default_factory=list)
+    map_image: Optional[np.ndarray] = None
 
     @property
     def best(self) -> Optional[Tuple[float, dict]]:
         return self.matches[0] if self.matches else None
+
+
+def entry_spots(entry: dict) -> Tuple[List[Tuple[int, int]], int, bool]:
+    """World spots to mark for a matched entry: (spots, level, primary).
+    primary means the first spot is the single target."""
+    spots = []
+    primary = False
+    if entry.get("x") is not None and entry.get("z") is not None:
+        spots.append((entry["x"], entry["z"]))
+        primary = True
+    for s in entry.get("scan_spots") or []:
+        spots.append((s["x"], s["z"]))
+    return spots, int(entry.get("level") or 0), primary
 
 
 def _fetch_json(url: str, cache_path: Path):
