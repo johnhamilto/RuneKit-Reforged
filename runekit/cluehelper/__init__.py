@@ -16,6 +16,7 @@ from runekit.cluehelper import maps as maps_mod
 from runekit.cluehelper import slide as slide_mod
 from runekit.cluehelper import slide_solver, solver
 from runekit.cluehelper import towers as towers_mod
+from runekit.cluehelper import wiki as wiki_mod
 from runekit.cluehelper import window as window_mod
 from runekit.cluehelper import worldmap
 from runekit.cluehelper.assets import ClueAssets
@@ -86,9 +87,16 @@ class _SolveThread(QThread):
                 self.progress.emit("Matching map image…")
                 match = maps_mod.read_map_clue(detection.to_array(frame), dbs, ClueAssets(self.cache_dir), hint=hint)
                 if match is not None:
+                    entry = match.entry
+                    if entry.get("x") is not None:
+                        wiki_entry = wiki_mod.nearest(
+                            dbs.get("wiki") or [], entry["x"], entry["z"], types=("map",)
+                        )
+                        if wiki_entry is not None:
+                            entry = wiki_entry
                     result.status = "solved"
                     result.read_text = "(map image)"
-                    result.matches = [(1.0, match.entry)]
+                    result.matches = [(1.0, entry)]
                 self._attach_map(result)
                 self.ok.emit(result)
                 return

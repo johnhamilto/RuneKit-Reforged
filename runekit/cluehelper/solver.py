@@ -19,6 +19,7 @@ import requests
 from PIL import Image
 
 from . import vision
+from . import wiki
 
 logger = logging.getLogger(__name__)
 
@@ -93,12 +94,15 @@ def load_databases(cache_dir: Path) -> dict:
     return {
         "clues": _fetch_json(CLUES_URL, cache_dir / "clue_db.json"),
         "coords": _fetch_json(COORDS_URL, cache_dir / "coord_db.json"),
+        "wiki": wiki.load(cache_dir),
     }
 
 
 def clue_text(entry: dict) -> str:
     if entry.get("type") in ("img", "emptyimg"):
         return ""  # the clue field holds an image signature, not text
+    if entry.get("source") == "wiki" and entry.get("type") != "scan":
+        return entry.get("clue") or ""
     clue = entry.get("scantext") if entry.get("type") == "scan" else entry.get("clue")
     if isinstance(clue, list):
         clue = " ".join(str(s) for s in clue)
@@ -107,6 +111,29 @@ def clue_text(entry: dict) -> str:
 
 def describe(entry: dict) -> str:
     kind = entry.get("type", "unknown")
+    if entry.get("source") == "wiki":
+        head = f"Type: {kind}"
+        if entry.get("difficulty"):
+            head += f" ({entry['difficulty']})"
+        parts = [head]
+        if entry.get("solution"):
+            parts.append(f"Solution: {entry['solution']}")
+        if entry.get("location"):
+            parts.append(f"Location: {entry['location']}")
+        if entry.get("travel"):
+            travel = entry["travel"]
+            parts.append(f"Travel: {travel}" if "\n" not in travel else f"Travel:\n{travel}")
+        req = entry.get("requirements") or ""
+        if req and req.lower() != "none":
+            parts.append(f"Requires: {req}")
+        if entry.get("fight"):
+            parts.append(f"Ambush: {entry['fight']}")
+        if entry.get("x") is not None:
+            where = f"World spot: x={entry['x']}, z={entry['z']}"
+            if entry.get("level"):
+                where += f", level {entry['level']}"
+            parts.append(where)
+        return "\n".join(parts)
     parts = [f"Type: {kind}"]
     if kind == "coordinate":
         where = f"Dig at: x={entry['x']}, z={entry['z']}"
@@ -137,6 +164,12 @@ def describe(entry: dict) -> str:
 
 def _ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def _matchkey(s: str) -> str:
+    """Case- and punctuation-insensitive comparison key. OCR drops or invents
+    punctuation freely, and the databases disagree on it for the same clue."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", "", s.lower())).strip()
 
 
 def _to_image(frame) -> Image.Image:
@@ -207,9 +240,15 @@ def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
     coord = parse_coordinates(full_text)
     if coord:
         entry = {"type": "coordinate", "x": coord["x"], "z": coord["z"]}
-        spot, dist = snap_to_dig_spot(coord["x"], coord["z"], dbs["coords"])
-        if spot is not None and dist <= 3:
-            entry.update(x=spot["x"], z=spot["z"], level=spot.get("level"), known_spot=True)
+        wiki_entry = wiki.nearest(
+            dbs.get("wiki") or [], coord["x"], coord["z"], types=("coordinate",), max_dist=3
+        )
+        if wiki_entry is not None:
+            entry = dict(wiki_entry, known_spot=True)
+        else:
+            spot, dist = snap_to_dig_spot(coord["x"], coord["z"], dbs["coords"])
+            if spot is not None and dist <= 3:
+                entry.update(x=spot["x"], z=spot["z"], level=spot.get("level"), known_spot=True)
         result.status = "solved"
         result.read_text = coord["text"]
         result.matches = [(1.0 if entry.get("known_spot") else 0.9, entry)]
@@ -217,21 +256,28 @@ def solve_frame(frame, dbs: dict, ocr=vision.ocr_lines) -> SolveResult:
 
     # The clue is one contiguous run of lines; neighbouring UI text (task
     # lists, tooltips) that slips into the body hurts the match. Score every
-    # span of up to six lines and keep the best one.
-    matchers = [
-        (difflib.SequenceMatcher(None, "", clue_text(e).lower().strip()), e)
-        for e in dbs["clues"]
+    # span of up to six lines and keep the best one. Wiki entries carry the
+    # richer answer, so they win ties against the runeapps copy of a clue.
+    candidates = [
+        e for e in dbs["clues"]
         if (e.get("type") in TEXT_TYPES or e.get("type") == "scan") and clue_text(e)
+    ] + [
+        e for e in dbs.get("wiki") or []
+        if e.get("type") in TEXT_TYPES and e.get("clue")
+    ]
+    matchers = [
+        (difflib.SequenceMatcher(None, "", _matchkey(clue_text(e))), e)
+        for e in candidates
     ]
     for i in range(len(body)):
         for j in range(i + 1, min(i + 6, len(body)) + 1):
             read = " ".join(l["text"] for l in body[i:j]).strip()
-            key = read.lower()
+            key = _matchkey(read)
             scored = []
             for m, e in matchers:
                 m.set_seq1(key)
                 scored.append((m.ratio(), e))
-            scored.sort(key=lambda t: -t[0])
+            scored.sort(key=lambda t: (-round(t[0], 3), 0 if t[1].get("source") == "wiki" else 1))
             if not result.matches or scored[0][0] > result.matches[0][0]:
                 result.matches = scored[:3]
                 result.read_text = read
