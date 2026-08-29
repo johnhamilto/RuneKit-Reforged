@@ -52,6 +52,12 @@ def _to_px(x: float, z: float, zoom: int) -> Tuple[float, float]:
     return (x + 0.5) * scale, (ORIGIN_Y - z) * scale
 
 
+def _tile_shift(zoom: int) -> int:
+    """The map's tile layer draws tiles offset 16 world tiles west and south
+    (the source's half-variant-grid alignment); mirror it when compositing."""
+    return 16 * 2 ** zoom
+
+
 def _draw_marker(draw: ImageDraw.ImageDraw, cx: float, cy: float, main: bool = True):
     r = 9 if main else 6
     color = (230, 30, 30) if main else (230, 120, 20)
@@ -89,22 +95,26 @@ def location_image(
         cx, cy = _to_px((max(xs) + min(xs)) / 2, (max(zs) + min(zs)) / 2, zoom)
     x0, y0 = int(round(cx - w / 2)), int(round(cy - h / 2))
 
+    shift = _tile_shift(zoom)
+    tx_range = range((x0 + shift) // TILE_SIZE, (x0 + w + shift) // TILE_SIZE + 1)
+    ty_range = range((y0 - shift) // TILE_SIZE, (y0 + h - shift) // TILE_SIZE + 1)
+
+    def compose(layer_floor: int) -> int:
+        count = 0
+        for tx in tx_range:
+            for ty in ty_range:
+                tile = _fetch_tile(cache_dir, layer_floor, zoom, tx, ty)
+                if tile is not None:
+                    canvas.paste(tile, (tx * TILE_SIZE - shift - x0,
+                                        ty * TILE_SIZE + shift - y0))
+                    count += 1
+        return count
+
     canvas = Image.new("RGB", (w, h), (24, 24, 24))
-    found = 0
-    for tx in range(x0 // TILE_SIZE, (x0 + w) // TILE_SIZE + 1):
-        for ty in range(y0 // TILE_SIZE, (y0 + h) // TILE_SIZE + 1):
-            tile = _fetch_tile(cache_dir, floor, zoom, tx, ty)
-            if tile is not None:
-                canvas.paste(tile, (tx * TILE_SIZE - x0, ty * TILE_SIZE - y0))
-                found += 1
+    found = compose(floor)
     if found == 0 and floor != 0:
         # upper floors are sparse; fall back to the ground layer for context
-        for tx in range(x0 // TILE_SIZE, (x0 + w) // TILE_SIZE + 1):
-            for ty in range(y0 // TILE_SIZE, (y0 + h) // TILE_SIZE + 1):
-                tile = _fetch_tile(cache_dir, 0, zoom, tx, ty)
-                if tile is not None:
-                    canvas.paste(tile, (tx * TILE_SIZE - x0, ty * TILE_SIZE - y0))
-                    found += 1
+        found = compose(0)
     if found == 0:
         return None
 
