@@ -97,7 +97,14 @@ def _probe_score(assets: ClueAssets, norm: np.ndarray, theme: str,
     ]
     if not caps:
         return -1.0
-    return sum(float(bank.scores(cap)[:BLANK].max()) for cap in caps) / len(caps)
+    total = 0.0
+    for cap in caps:
+        # near-flat crops (plain interface panels) make ZNCC degenerate and
+        # can score high against the darkest themes; they prove nothing
+        if float(cap[:, :, :3].std()) < 8:
+            continue
+        total += float(bank.scores(cap)[:BLANK].max())
+    return total / len(caps)
 
 
 def _classify_board(assets: ClueAssets, norm: np.ndarray, theme: str, dx: int, dy: int):

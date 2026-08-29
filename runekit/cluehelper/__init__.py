@@ -45,7 +45,7 @@ def _title_match(text: str, title: str, fuzzy: float) -> bool:
     stray words like a "Tower" map label can't route or trigger."""
     key = solver._matchkey(text)
     tkey = solver._matchkey(title)
-    if len(tkey) > 12:
+    if len(tkey) >= 12:  # "treasure map" and longer tolerate OCR noise
         return solver._ratio(key, tkey) >= fuzzy
     return (
         len(key) >= len(tkey)
@@ -86,7 +86,7 @@ class _ScanThread(QThread):
             else:
                 frame_small = frame
             for line in vision.ocr_lines(frame_small, fast=True):
-                if any(_title_match(line["text"], t, 0.6) for t in SCREEN_TITLES):
+                if any(_title_match(line["text"], t, 0.82) for t in SCREEN_TITLES):
                     self.verdict.emit(True)
                     return
             # slide puzzles have no title; probe for the interface sprite.
@@ -342,6 +342,10 @@ class ClueHelper(QObject):
             return
         self._auto_misses = 0
         if not self._auto_armed or time.time() - self._auto_last < self._auto_penalty:
+            logger.debug(
+                "Screening hit but holding (armed=%s, penalty %ds)",
+                self._auto_armed, self._auto_penalty,
+            )
             return
         instance = self.instance_provider() if self.instance_provider else None
         if instance is None:
@@ -364,6 +368,7 @@ class ClueHelper(QObject):
 
         self._auto_solving = auto
         self._instance = instance
+        logger.info("Clue solve started (%s)", "auto" if auto else "manual")
         self.window.set_busy(True, "Capturing the game…")
         self._thread = _SolveThread(instance, self.cache_dir, parent=self)
         self._thread.ok.connect(self.on_result)
