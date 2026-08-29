@@ -119,8 +119,9 @@ class _ScanThread(QThread):
                 needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
                 m = detection.calibrate_scale(detection.to_array(frame), needle, hint=hint)
                 # the sprite is just a close button; other interfaces' X
-                # buttons score up to ~0.85, a real slide modal ~0.99
-                if m.ok and m.zncc >= 0.9:
+                # buttons flicker up to ~0.9, a real slide modal ~0.99
+                if m.ok and m.zncc >= 0.95:
+                    logger.info("Screening #%d: slide sprite hit (zncc %.2f)", self._runs, m.zncc)
                     self.verdict.emit(True)
                     return
             self.verdict.emit(False)
