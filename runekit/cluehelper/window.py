@@ -226,6 +226,8 @@ class ClueSolverWindow(QWidget):
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("Clue Solver")
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        # never yank focus from the game when auto-detect updates the window
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setMinimumWidth(320)
 
         layout = QVBoxLayout(self)

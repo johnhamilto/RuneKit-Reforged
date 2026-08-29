@@ -335,9 +335,10 @@ class ClueHelper(QObject):
     @Slot()
     def solve(self, instance: "GameInstance", auto: bool = False):
         if auto:
-            # update in place without stealing focus from the game
-            self.window.show()
-            self.window.raise_()
+            # update in place without stealing focus from the game; the
+            # stay-on-top hint keeps it visible once shown
+            if not self.window.isVisible():
+                self.window.show()
         else:
             self.window.open()
         if self._thread is not None and self._thread.isRunning():
