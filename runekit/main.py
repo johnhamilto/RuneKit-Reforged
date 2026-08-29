@@ -30,6 +30,9 @@ def setup_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
 
+    # PIL logs every TIFF tag of every capture at DEBUG; that floods the file
+    logging.getLogger("PIL").setLevel(logging.INFO)
+
     # Console: INFO and above
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)

@@ -56,9 +56,11 @@ class _ScanThread(QThread):
         super().__init__(parent=parent)
         self.instance = None
         self.cache_dir = cache_dir
+        self._runs = 0
 
     def run(self):
         try:
+            self._runs += 1
             frame = solver._to_image(self.instance.grab_game())
             if frame.width > SCREEN_WIDTH:
                 frame_small = frame.resize(
@@ -71,8 +73,11 @@ class _ScanThread(QThread):
                 if max(solver._ratio(line["text"], t) for t in SCREEN_TITLES) >= 0.6:
                     self.verdict.emit(True)
                     return
+            # slide puzzles have no title; probe for the interface sprite.
+            # Cheap with a scale hint, so do the full sweep only occasionally
+            # until one is known.
             hint = _load_hint(self.cache_dir)
-            if hint:
+            if hint or self._runs % 8 == 1:
                 needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
                 m = detection.calibrate_scale(detection.to_array(frame), needle, hint=hint)
                 if m.ok:
@@ -135,6 +140,8 @@ class _SolveThread(QThread):
                 self.progress.emit("Matching map image…")
                 match = maps_mod.read_map_clue(detection.to_array(frame), dbs, ClueAssets(self.cache_dir), hint=hint)
                 if match is not None:
+                    if match.scale:
+                        self._save_hint(match.scale)
                     entry = match.entry
                     if entry.get("x") is not None:
                         wiki_entry = wiki_mod.nearest(
@@ -200,7 +207,7 @@ class _SolveThread(QThread):
                 return
 
             self.progress.emit("Looking for a slide puzzle…")
-            board = slide_mod.read_slide(arr, assets, hint=hint)
+            board = slide_mod.read_slide(arr, assets, hint=hint, debug_dir=self.cache_dir)
             if board is not None:
                 self._save_hint(board.scale)
                 try:
@@ -217,6 +224,8 @@ class _SolveThread(QThread):
             self.progress.emit("Looking for a compass…")
             comp = compass_mod.read_compass(arr, assets, hint=hint)
             if comp is not None:
+                if comp.scale:
+                    self._save_hint(comp.scale)
                 self.ok.emit(comp)
                 return
 

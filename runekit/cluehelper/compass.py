@@ -55,6 +55,7 @@ class CompassRead:
     direction: float  # world direction (atan2 of dz, dx), radians
     bearing_deg: float  # compass bearing, 0 = north, clockwise
     wind: str
+    scale: float = 0.0
 
 
 def _wrap(a: float, m: float) -> float:
@@ -138,4 +139,4 @@ def read_compass(frame, assets: ClueAssets, hint: Optional[float] = None) -> Opt
     bearing = _wrap(bearing, 360.0)
     wind = WINDS[int(round(bearing / 22.5)) % 16]
     logger.info("Compass needle raw %.3f -> direction %.3f, bearing %.0f (%s)", raw, direction, bearing, wind)
-    return CompassRead(raw_angle=raw, direction=direction, bearing_deg=bearing, wind=wind)
+    return CompassRead(raw_angle=raw, direction=direction, bearing_deg=bearing, wind=wind, scale=s)

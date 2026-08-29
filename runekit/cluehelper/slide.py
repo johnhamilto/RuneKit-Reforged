@@ -21,10 +21,11 @@ TILE = 56  # on-screen tile size at 1x
 BOARD_PX = TILE * 5
 NEEDLE_TO_BOARD = (-297, 15)  # slide close button top-left -> board top-left
 REF_TILE = 49  # reference art tile size
-PAD = 8
+PAD = 36  # normalized margin; leaves room to search for the true board origin
 
 THEME_PROBE_CELLS = (6, 12, 18)
 BLANK = 24
+ORIGIN_SWEEP = 28  # board origin search radius around the nominal offset
 
 
 @dataclass
@@ -62,6 +63,8 @@ def _captured_tile(norm: np.ndarray, cell: int, jx: int = 0, jy: int = 0) -> Opt
     r, c = divmod(cell, 5)
     x = PAD + c * TILE + jx
     y = PAD + r * TILE + jy
+    if x < 0 or y < 0:
+        return None
     crop = norm[y:y + TILE, x:x + TILE, :3]
     if crop.shape[:2] != (TILE, TILE):
         return None
@@ -85,55 +88,40 @@ def _normalize_board(frame: np.ndarray, needle: detection.Match, scale: float) -
     return norm
 
 
-def read_slide(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optional[SlideBoard]:
-    frame = detection.to_array(frame)
-    m = detection.calibrate_scale(frame, assets.needle("slide"), hint=hint)
-    if not m.ok:
-        return None
-    logger.info("Slide interface at (%d, %d), scale %.3f, zncc %.3f", m.x, m.y, m.scale, m.zncc)
+def _probe_score(assets: ClueAssets, norm: np.ndarray, theme: str,
+                 dx: int = 0, dy: int = 0) -> float:
+    bank = _theme_bank(assets, theme)
+    caps = [
+        c for c in (_captured_tile(norm, cell, dx, dy) for cell in THEME_PROBE_CELLS)
+        if c is not None
+    ]
+    if not caps:
+        return -1.0
+    return sum(float(bank.scores(cap)[:BLANK].max()) for cap in caps) / len(caps)
 
-    # theme vote on probe cells, refining scale at the same time
-    best = None  # (score, scale, norm, theme)
-    for s in (m.scale * 0.95, m.scale, m.scale * 1.05):
-        norm = _normalize_board(frame, m, s)
-        if norm is None:
-            continue
-        caps = [c for c in (_captured_tile(norm, cell) for cell in THEME_PROBE_CELLS) if c is not None]
-        if not caps:
-            continue
-        theme_scores = {}
-        for theme in SLIDE_THEMES:
-            bank = _theme_bank(assets, theme)
-            theme_scores[theme] = sum(float(bank.scores(cap)[:BLANK].max()) for cap in caps)
-        theme, score = max(theme_scores.items(), key=lambda kv: kv[1])
-        if best is None or score > best[0]:
-            best = (score, s, norm, theme)
 
-    if best is None or best[0] / len(THEME_PROBE_CELLS) < 0.45:
-        logger.info("Slide theme identification failed (best %.2f)", best[0] if best else -1)
-        return None
-    _, scale, norm, theme = best
+def _classify_board(assets: ClueAssets, norm: np.ndarray, theme: str, dx: int, dy: int):
+    """Full board read at an origin offset: (board, min score, mean score)."""
     bank = _theme_bank(assets, theme)
 
-    # blank cell: darkest, flattest tile
     stats = []
     for cell in range(25):
-        cap = _captured_tile(norm, cell)
-        stats.append((float(cap[:, :, :3].std()), float(cap[:, :, :3].mean()), cell))
-    blank_cell = min(stats, key=lambda t: t[0] + t[1])[2]
+        cap = _captured_tile(norm, cell, dx, dy)
+        if cap is None:
+            return None
+        stats.append((float(cap[:, :, :3].std()) + float(cap[:, :, :3].mean()), cell))
+    blank_cell = min(stats)[1]
 
-    # score every remaining cell against every part with small jitter
     jitters = [(jx, jy) for jx in (-3, 0, 3) for jy in (-3, 0, 3)]
     cells = [c for c in range(25) if c != blank_cell]
     scores = np.full((25, 24), -1.0)
     for cell in cells:
         for jx, jy in jitters:
-            cap = _captured_tile(norm, cell, jx, jy)
+            cap = _captured_tile(norm, cell, dx + jx, dy + jy)
             if cap is None:
                 continue
             scores[cell] = np.maximum(scores[cell], bank.scores(cap)[:BLANK])
 
-    # greedy unique assignment
     board = [-1] * 25
     board[blank_cell] = BLANK
     taken_cells, taken_parts = {blank_cell}, set()
@@ -151,14 +139,85 @@ def read_slide(frame, assets: ClueAssets, hint: Optional[float] = None) -> Optio
         assigned.append(score)
         if len(taken_cells) == 25:
             break
+    if not assigned:
+        return None
+    return board, float(min(assigned)), float(np.mean(assigned))
 
-    confidence = float(np.mean(assigned)) if assigned else 0.0
-    if min(assigned) < 0.25 or confidence < 0.45:
-        logger.info("Slide read rejected: min %.2f mean %.2f", min(assigned), confidence)
+
+def read_slide(frame, assets: ClueAssets, hint: Optional[float] = None,
+               debug_dir: Optional[object] = None) -> Optional[SlideBoard]:
+    frame = detection.to_array(frame)
+    m = detection.calibrate_scale(frame, assets.needle("slide"), hint=hint)
+    if not m.ok:
+        return None
+    logger.info("Slide interface at (%d, %d), scale %.3f, zncc %.3f", m.x, m.y, m.scale, m.zncc)
+
+    # rank themes at the nominal board origin, refining scale at the same time
+    best = None  # (score, scale, norm, ranking)
+    for s in (m.scale * 0.95, m.scale, m.scale * 1.05):
+        norm = _normalize_board(frame, m, s)
+        if norm is None:
+            continue
+        ranking = sorted(
+            ((_probe_score(assets, norm, theme), theme) for theme in SLIDE_THEMES),
+            reverse=True,
+        )
+        if best is None or ranking[0][0] > best[0]:
+            best = (ranking[0][0], s, norm, ranking)
+    if best is None:
+        logger.info("Slide board region out of frame")
+        return None
+    _, scale, norm, ranking = best
+    logger.info("Slide probe: %s", ", ".join(f"{t} {sc:.2f}" for sc, t in ranking[:3]))
+
+    # try the nominal origin first; when that read fails the gates, sweep
+    # origins around it (interface revisions move the board) with the
+    # top-ranked themes and take the best passing read
+    def attempt(dx, dy, theme):
+        read = _classify_board(assets, norm, theme, dx, dy)
+        if read is None:
+            return None
+        board, min_sc, conf = read
+        logger.info(
+            "Slide read theme %s origin (%+d,%+d): min %.2f mean %.2f",
+            theme, dx, dy, min_sc, conf,
+        )
+        if min_sc >= 0.25 and conf >= 0.45:
+            return board, theme, dx, dy, conf
         return None
 
-    bx = int(round(m.x + NEEDLE_TO_BOARD[0] * scale))
-    by = int(round(m.y + NEEDLE_TO_BOARD[1] * scale))
+    result = attempt(0, 0, ranking[0][1])
+    if result is None:
+        sweep = range(-ORIGIN_SWEEP, ORIGIN_SWEEP + 1, 7)
+        candidates = []
+        for probe_sc, theme in ranking[:5]:
+            top = max(
+                ((_probe_score(assets, norm, theme, dx, dy), dx, dy)
+                 for dx in sweep for dy in sweep),
+                key=lambda t: t[0],
+            )
+            if top[0] > 0.35:
+                candidates.append((top[0], top[1], top[2], theme))
+        candidates.sort(reverse=True)
+        for _, dx, dy, theme in candidates:
+            result = attempt(dx, dy, theme)
+            if result is not None:
+                break
+
+    if result is None:
+        logger.info("Slide read rejected for all candidates")
+        if debug_dir is not None:
+            try:
+                path = str(debug_dir) + "/debug_slide_reject.png"
+                Image.fromarray(norm[:, :, :3].astype(np.uint8)).save(path)
+                logger.info("Saved rejected slide board crop to %s", path)
+            except Exception:
+                pass
+        return None
+
+    board, theme, dx, dy, confidence = result
+    bx = int(round(m.x + (NEEDLE_TO_BOARD[0] + dx) * scale))
+    by = int(round(m.y + (NEEDLE_TO_BOARD[1] + dy) * scale))
     size = int(round(BOARD_PX * scale))
     return SlideBoard(
         theme=theme,

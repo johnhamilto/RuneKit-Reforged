@@ -92,6 +92,7 @@ class MapMatch:
     entry: dict
     score: float
     margin: float  # distance gap to the runner-up
+    scale: float = 0.0
 
 
 def find_modal(frame: np.ndarray, assets: ClueAssets, hint: Optional[float] = None):
@@ -148,7 +149,7 @@ def read_map_clue(frame, dbs: dict, assets: ClueAssets, hint: Optional[float] = 
         score, entry = scored[0]
         margin = scored[1][0] - score if len(scored) > 1 else score
         if best is None or score < best.score:
-            best = MapMatch(entry=entry, score=score, margin=margin)
+            best = MapMatch(entry=entry, score=score, margin=margin, scale=s)
 
     if best is None:
         return None
