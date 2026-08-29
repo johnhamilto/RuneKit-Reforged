@@ -39,6 +39,21 @@ SCREEN_TITLES = ("mysterious clue scroll", "treasure map", "lockbox", "towers", 
 SCREEN_WIDTH = 1700  # frames are shrunk to this for fast screening
 
 
+def _title_match(text: str, title: str, fuzzy: float) -> bool:
+    """Match an OCR line against an interface title. Long titles tolerate OCR
+    noise; short ones ("towers") need a near-exact, same-word-count match so
+    stray words like a "Tower" map label can't route or trigger."""
+    key = solver._matchkey(text)
+    tkey = solver._matchkey(title)
+    if len(tkey) > 12:
+        return solver._ratio(key, tkey) >= fuzzy
+    return (
+        len(key) >= len(tkey)
+        and len(key.split()) == len(tkey.split())
+        and solver._ratio(key, tkey) >= 0.87
+    )
+
+
 def _load_hint(cache_dir: Path):
     try:
         return json.loads((cache_dir / "scale_hint.json").read_text())["scale"]
@@ -71,7 +86,7 @@ class _ScanThread(QThread):
             else:
                 frame_small = frame
             for line in vision.ocr_lines(frame_small, fast=True):
-                if max(solver._ratio(line["text"], t) for t in SCREEN_TITLES) >= 0.6:
+                if any(_title_match(line["text"], t, 0.6) for t in SCREEN_TITLES):
                     self.verdict.emit(True)
                     return
             # slide puzzles have no title; probe for the interface sprite.
@@ -114,7 +129,7 @@ class _SolveThread(QThread):
     def _puzzle_title(self, result) -> str:
         for line in result.lines:
             for title in ("lockbox", "towers", "celtic knot"):
-                if solver._ratio(line["text"], title) >= 0.75:
+                if _title_match(line["text"], title, 0.75):
                     return title
         return ""
 
