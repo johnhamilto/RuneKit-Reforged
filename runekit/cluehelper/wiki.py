@@ -33,6 +33,10 @@ def plain(s: Optional[str]) -> str:
     """Wikitext/HTML to readable text."""
     if not s:
         return ""
+    # skill requirement gadgets carry the skill name only in attributes
+    s = re.sub(
+        r'<span[^>]*class="skillreq"[^>]*data-skill="([^"]+)"[^>]*data-level="(\d+)"[^>]*>.*?</span>',
+        r"\2 \1", s, flags=re.S)
     s = re.sub(r"<sup[^>]*ordinal-suffix[^>]*>(.*?)</sup>", r"\1", s, flags=re.S)
     s = re.sub(r"<sup[^>]*>.*?</sup>", "", s, flags=re.S)
     # the floor-convention gadget duplicates text for the US variant
@@ -120,7 +124,16 @@ def _normalize(row: dict) -> dict:
         "group": type_data.get("group") or "",
         "page_name": row.get("page_name") or "",
         "level": row.get("plane") or 0,
+        "items": [i["item"] for i in type_data.get("items") or [] if i.get("item")],
+        "emotes": type_data.get("emotes") or [],
     }
+    hole = type_data.get("hideyhole")
+    if isinstance(hole, dict):
+        entry["hideyhole"] = {
+            "x": hole.get("x"),
+            "z": hole.get("y"),
+            "text": plain(hole.get("description") or ""),
+        }
     if xs and zs:
         entry["x"], entry["z"] = xs[0], zs[0]
         if len(xs) > 1:
@@ -130,25 +143,38 @@ def _normalize(row: dict) -> dict:
     return entry
 
 
+CACHE_FORMAT = 2
+
+
 def load(cache_dir: Path) -> List[dict]:
     """Synced wiki clue entries; empty list when offline with no cache."""
     cache_path = cache_dir / "wiki_clues.json"
-    fresh = cache_path.exists() and time.time() - cache_path.stat().st_mtime < CACHE_MAX_AGE
+    data = None
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text())
+        except ValueError:
+            cache_path.unlink(missing_ok=True)
+    fresh = (
+        data is not None
+        and isinstance(data, dict)
+        and data.get("v") == CACHE_FORMAT
+        and time.time() - cache_path.stat().st_mtime < CACHE_MAX_AGE
+    )
     if not fresh:
         try:
             entries = [_normalize(r) for r in _fetch_rows()]
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(entries))
+            cache_path.write_text(json.dumps({"v": CACHE_FORMAT, "entries": entries}))
             logger.info("Synced %d clue entries from the wiki", len(entries))
+            return entries
         except Exception:
             logger.warning("Wiki clue sync failed", exc_info=True)
-            if not cache_path.exists():
-                return []
-    try:
-        return json.loads(cache_path.read_text())
-    except ValueError:
-        cache_path.unlink(missing_ok=True)
-        return []
+    if isinstance(data, dict):
+        return data.get("entries") or []
+    if isinstance(data, list):  # stale pre-versioned cache; usable offline
+        return data
+    return []
 
 
 def nearest(entries: List[dict], x: int, z: int, types=(), max_dist: int = 15) -> Optional[dict]:

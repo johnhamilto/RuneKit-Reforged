@@ -570,6 +570,8 @@ class ClueHelper(QObject):
         ratio, entry = result.best
         prefix = "" if result.status == "solved" else "Low confidence match. "
         answer = html.escape(solver.describe(entry)).replace("\n", "<br>")
+        for label in ("Emote:", "Items:", "Hidey-hole:"):
+            answer = answer.replace(label, f"<b>{label}</b>", 1)
         body = f"<b>“{html.escape(solver.clue_text(entry) or result.read_text)}”</b><br><br>{answer}"
         pixmap = None
         if result.map_image is not None:

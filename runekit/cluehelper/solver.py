@@ -70,6 +70,9 @@ def entry_spots(entry: dict) -> Tuple[List[Tuple[int, int]], int, bool]:
         primary = True
     for s in entry.get("scan_spots") or []:
         spots.append((s["x"], s["z"]))
+    hole = entry.get("hideyhole") or {}
+    if hole.get("x") is not None and hole.get("z") is not None:
+        spots.append((hole["x"], hole["z"]))
     return spots, int(entry.get("level") or 0), primary
 
 
@@ -116,6 +119,12 @@ def describe(entry: dict) -> str:
         if entry.get("difficulty"):
             head += f" ({entry['difficulty']})"
         parts = [head]
+        if entry.get("emotes"):
+            parts.append(f"Emote: {' then '.join(entry['emotes'])}")
+        if entry.get("items"):
+            parts.append(f"Items: {', '.join(entry['items'])}")
+        if entry.get("hideyhole", {}).get("text"):
+            parts.append(entry["hideyhole"]["text"])
         if entry.get("solution"):
             parts.append(f"Solution: {entry['solution']}")
         if entry.get("location"):
