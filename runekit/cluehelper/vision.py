@@ -29,7 +29,10 @@ def ocr_lines(image: Image.Image, fast: bool = False) -> List[OcrLine]:
         )
 
     buf = io.BytesIO()
-    image.convert("RGB").save(buf, format="PNG")
+    if fast:  # screening path; JPEG encodes several times faster than PNG
+        image.convert("RGB").save(buf, format="JPEG", quality=85)
+    else:
+        image.convert("RGB").save(buf, format="PNG")
     data = Quartz.CFDataCreate(None, buf.getvalue(), len(buf.getvalue()))
     src = Quartz.CGImageSourceCreateWithData(data, None)
     cgimg = Quartz.CGImageSourceCreateImageAtIndex(src, 0, None)

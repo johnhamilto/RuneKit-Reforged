@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QBrush, QColor, QFont, QPen
@@ -32,7 +33,8 @@ logger = logging.getLogger(__name__)
 OVERLAY_MOVES = 25
 OVERLAY_TIMEOUT_MS = 20000
 
-AUTO_INTERVAL_MS = 4000
+AUTO_INTERVAL_MS = 1200
+AUTO_OCR_FLOOR_S = 8  # run OCR at least this often even with no screen change
 AUTO_COOLDOWN_S = 10
 AUTO_REARM_MISSES = 2
 SCREEN_TITLES = ("mysterious clue scroll", "treasure map", "lockbox", "towers", "celtic knot")
@@ -95,11 +97,29 @@ class _ScanThread(QThread):
         self.instance = None
         self.cache_dir = cache_dir
         self._runs = 0
+        self._thumb = None
+        self._last_ocr = 0.0
+
+    def _changed(self, frame: Image.Image) -> bool:
+        """Cheap screen-change check: interfaces opening or scroll text
+        advancing move a large share of pixels; ambient animation doesn't."""
+        thumb = np.asarray(
+            frame.convert("L").resize((120, 78), Image.BILINEAR), dtype=np.int16
+        )
+        prev, self._thumb = self._thumb, thumb
+        if prev is None:
+            return True
+        return float((np.abs(thumb - prev) > 15).mean()) > 0.05
 
     def run(self):
         try:
             self._runs += 1
             frame = solver._to_image(self.instance.grab_game())
+            # OCR only when the screen changed (or on the periodic floor);
+            # an unchanged tick emits nothing and costs a few milliseconds
+            if not self._changed(frame) and time.time() - self._last_ocr < AUTO_OCR_FLOOR_S:
+                return
+            self._last_ocr = time.time()
             if frame.width > SCREEN_WIDTH:
                 frame_small = frame.resize(
                     (SCREEN_WIDTH, round(frame.height * SCREEN_WIDTH / frame.width)),
