@@ -97,7 +97,8 @@ def load_databases(cache_dir: Path) -> dict:
     return {
         "clues": _fetch_json(CLUES_URL, cache_dir / "clue_db.json"),
         "coords": _fetch_json(COORDS_URL, cache_dir / "coord_db.json"),
-        "wiki": wiki.load(cache_dir),
+        # a cache written by a different app version must degrade, not crash
+        "wiki": [e for e in wiki.load(cache_dir) if isinstance(e, dict)],
     }
 
 

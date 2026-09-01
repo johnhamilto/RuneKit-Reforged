@@ -6,6 +6,8 @@ the map's CRS: px = (x + 0.5) * 2^zoom, py = (12799.5 - z) * 2^zoom,
 512px tiles.
 """
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -20,31 +22,95 @@ TILE_SIZE = 512
 MAX_ZOOM = 5
 ORIGIN_Y = 12799.5
 
+# playable surface bounding box (x0, z0, x1, z1) and the zooms solves use
+PREFETCH_BOUNDS = (1600, 1900, 5500, 4700)
+PREFETCH_ZOOMS = (1, 2, 3)
+
+_session = requests.Session()
+_session.mount(
+    "https://",
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=8),
+)
+
 
 def _tile_path(cache_dir: Path, floor: int, zoom: int, tx: int, ty: int) -> Path:
     return cache_dir / "map_tiles" / f"{floor}" / f"{zoom}" / f"{tx}-{ty}.webp"
 
 
-def _fetch_tile(cache_dir: Path, floor: int, zoom: int, tx: int, ty: int) -> Optional[Image.Image]:
+def _download_tile(cache_dir: Path, floor: int, zoom: int, tx: int, ty: int) -> Path:
     path = _tile_path(cache_dir, floor, zoom, tx, ty)
     if not path.exists():
         url = f"{TILE_BASE}/topdown-{floor}/{zoom}/{tx}-{ty}.webp"
-        try:
-            r = requests.get(url, timeout=10)
-        except requests.RequestException:
-            logger.warning("Map tile fetch failed: %s", url, exc_info=True)
-            return None
+        r = _session.get(url, timeout=10)
         path.parent.mkdir(parents=True, exist_ok=True)
         # cache misses too (empty file) so oceans don't refetch every time
         path.write_bytes(r.content if r.status_code == 200 else b"")
+    return path
+
+
+def _fetch_tile(cache_dir: Path, floor: int, zoom: int, tx: int, ty: int) -> Optional[Image.Image]:
+    try:
+        path = _download_tile(cache_dir, floor, zoom, tx, ty)
+    except requests.RequestException:
+        logger.warning("Map tile fetch failed: %d/%d/%d-%d", floor, zoom, tx, ty)
+        return None
     data = path.read_bytes()
     if not data:
         return None
     try:
-        return Image.open(Path(path)).convert("RGB")
+        return Image.open(path).convert("RGB")
     except Exception:
         path.unlink(missing_ok=True)
         return None
+
+
+def _tile_range(zoom: int, bounds=PREFETCH_BOUNDS):
+    x0, z0, x1, z1 = bounds
+    scale = 2 ** zoom
+    txs = range(int(x0 * scale) // TILE_SIZE - 1, int(x1 * scale) // TILE_SIZE + 2)
+    tys = range(int((ORIGIN_Y - z1) * scale) // TILE_SIZE - 1,
+                int((ORIGIN_Y - z0) * scale) // TILE_SIZE + 2)
+    return txs, tys
+
+
+def prefetch(cache_dir: Path):
+    """One-time download of the playable surface at the solve zooms, so map
+    snapshots come from disk. Misses are cached, so this only ever runs the
+    missing set."""
+    marker = cache_dir / "map_tiles" / "prefetch_done"
+    if marker.exists():
+        return
+    jobs = []
+    for zoom in PREFETCH_ZOOMS:
+        txs, tys = _tile_range(zoom)
+        for tx in txs:
+            for ty in tys:
+                if not _tile_path(cache_dir, 0, zoom, tx, ty).exists():
+                    jobs.append((zoom, tx, ty))
+    if jobs:
+        logger.info("Prefetching %d world map tiles", len(jobs))
+        failed = 0
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            def one(job):
+                zoom, tx, ty = job
+                try:
+                    _download_tile(cache_dir, 0, zoom, tx, ty)
+                    return 0
+                except requests.RequestException:
+                    return 1
+            failed = sum(pool.map(one, jobs))
+        if failed:
+            logger.warning("Map prefetch incomplete: %d tiles failed; will retry next start", failed)
+            return
+        logger.info("World map prefetch complete")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("1")
+
+
+def start_prefetch(cache_dir: Path):
+    threading.Thread(
+        target=prefetch, args=(cache_dir,), daemon=True, name="map-prefetch"
+    ).start()
 
 
 def _to_px(x: float, z: float, zoom: int) -> Tuple[float, float]:
@@ -100,14 +166,23 @@ def location_image(
     ty_range = range((y0 - shift) // TILE_SIZE, (y0 + h - shift) // TILE_SIZE + 1)
 
     def compose(layer_floor: int) -> int:
+        coords = [(tx, ty) for tx in tx_range for ty in ty_range]
+        missing = [
+            c for c in coords
+            if not _tile_path(cache_dir, layer_floor, zoom, *c).exists()
+        ]
+        if missing:  # fetch cache misses in parallel, then paste from disk
+            with ThreadPoolExecutor(max_workers=min(8, len(missing))) as pool:
+                list(pool.map(
+                    lambda c: _fetch_tile(cache_dir, layer_floor, zoom, *c), missing
+                ))
         count = 0
-        for tx in tx_range:
-            for ty in ty_range:
-                tile = _fetch_tile(cache_dir, layer_floor, zoom, tx, ty)
-                if tile is not None:
-                    canvas.paste(tile, (tx * TILE_SIZE - shift - x0,
-                                        ty * TILE_SIZE + shift - y0))
-                    count += 1
+        for tx, ty in coords:
+            tile = _fetch_tile(cache_dir, layer_floor, zoom, tx, ty)
+            if tile is not None:
+                canvas.paste(tile, (tx * TILE_SIZE - shift - x0,
+                                    ty * TILE_SIZE + shift - y0))
+                count += 1
         return count
 
     canvas = Image.new("RGB", (w, h), (24, 24, 24))

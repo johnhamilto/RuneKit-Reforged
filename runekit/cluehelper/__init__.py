@@ -319,6 +319,7 @@ class ClueHelper(QObject):
         self.cache_dir = Path(
             QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
         )
+        worldmap.start_prefetch(self.cache_dir)
         self._thread = None
         self._instance = None
         self._window = None
