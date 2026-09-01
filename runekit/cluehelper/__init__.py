@@ -39,6 +39,20 @@ SCREEN_TITLES = ("mysterious clue scroll", "treasure map", "lockbox", "towers", 
 SCREEN_WIDTH = 1700  # frames are shrunk to this for fast screening
 
 
+def _content_key(title_line: dict, lines: list) -> str:
+    """Fingerprint of the clue interface's text: the title plus the lines
+    below and roughly centered on it. Stable while the same clue stays
+    open; changes when the scroll advances to its next step."""
+    tx, ty, tw, th = title_line["box"]
+    tcx = tx + tw / 2
+    body = []
+    for line in lines:
+        x, y, w, h = line["box"]
+        if y + h <= ty + th * 0.5 and abs((x + w / 2) - tcx) < 0.3 and y > ty - 0.4:
+            body.append(solver._matchkey(line["text"]))
+    return solver._matchkey(title_line["text"]) + "|" + "|".join(sorted(body))
+
+
 def _title_match(text: str, title: str, fuzzy: float) -> bool:
     """Match an OCR line against an interface title. Long titles tolerate
     heavy OCR noise but must span at least two words of it, so a lone word
@@ -71,9 +85,10 @@ def _load_hint(cache_dir: Path):
 class _ScanThread(QThread):
     """Cheap screen check for a clue-like interface: fast OCR for known
     titles at reduced resolution, plus a slide needle probe once a scale
-    hint exists."""
+    hint exists. Hits carry a fingerprint of the text near the title so
+    the caller can tell a new clue from the same one sitting open."""
 
-    verdict = Signal(bool)
+    verdict = Signal(bool, str)
 
     def __init__(self, cache_dir: Path, parent=None):
         super().__init__(parent=parent)
@@ -99,17 +114,18 @@ class _ScanThread(QThread):
                     r = solver._ratio(solver._matchkey(line["text"]), solver._matchkey(t))
                     if r > best[0]:
                         best = (r, line["text"], t)
-            hit = any(
-                _title_match(line["text"], t, 0.7)
-                for line in lines for t in SCREEN_TITLES
+            title = next(
+                (line for line in lines
+                 if any(_title_match(line["text"], t, 0.7) for t in SCREEN_TITLES)),
+                None,
             )
             logger.log(
-                logging.INFO if hit or self._runs % 15 == 1 else logging.DEBUG,
+                logging.INFO if title or self._runs % 15 == 1 else logging.DEBUG,
                 "Screening #%d: %d lines, best %r vs %r (%.2f), hit=%s",
-                self._runs, len(lines), best[1], best[2], best[0], hit,
+                self._runs, len(lines), best[1], best[2], best[0], title is not None,
             )
-            if hit:
-                self.verdict.emit(True)
+            if title is not None:
+                self.verdict.emit(True, _content_key(title, lines))
                 return
             # slide puzzles have no title; probe for the interface sprite.
             # Cheap with a scale hint, so do the full sweep only occasionally
@@ -122,12 +138,12 @@ class _ScanThread(QThread):
                 # buttons flicker up to ~0.9, a real slide modal ~0.99
                 if m.ok and m.zncc >= 0.95:
                     logger.info("Screening #%d: slide sprite hit (zncc %.2f)", self._runs, m.zncc)
-                    self.verdict.emit(True)
+                    self.verdict.emit(True, f"slide:{m.x // 20},{m.y // 20}")
                     return
-            self.verdict.emit(False)
+            self.verdict.emit(False, "")
         except Exception:
             logger.debug("Clue screening failed", exc_info=True)
-            self.verdict.emit(False)
+            self.verdict.emit(False, "")
 
 
 class _SolveThread(QThread):
@@ -313,6 +329,8 @@ class ClueHelper(QObject):
         self._auto_misses = 0
         self._auto_last = 0.0
         self._auto_penalty = AUTO_COOLDOWN_S
+        self._auto_key = None  # content of the last auto-solved clue
+        self._seen_key = None  # content most recently seen by screening
         self._scan_thread = None
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(AUTO_INTERVAL_MS)
@@ -356,24 +374,30 @@ class ClueHelper(QObject):
         self._scan_thread.instance = instance
         self._scan_thread.start()
 
-    @Slot(bool)
-    def _on_scan_verdict(self, found: bool):
+    @Slot(bool, str)
+    def _on_scan_verdict(self, found: bool, key: str):
         if not found:
             self._auto_misses += 1
             if self._auto_misses >= AUTO_REARM_MISSES:
                 self._auto_armed = True
+                self._auto_key = None  # reopening the same clue solves again
             return
         self._auto_misses = 0
-        if not self._auto_armed or time.time() - self._auto_last < self._auto_penalty:
-            logger.debug(
-                "Screening hit but holding (armed=%s, penalty %ds)",
-                self._auto_armed, self._auto_penalty,
-            )
+        self._seen_key = key
+        if self._thread is not None and self._thread.isRunning():
+            return  # a solve is already looking at this screen
+        # fire when re-armed (interface was gone) or when the clue text
+        # changed in place (scrolls advance to their next step without closing)
+        if not self._auto_armed and key == self._auto_key:
+            return
+        if time.time() - self._auto_last < self._auto_penalty:
+            logger.debug("Screening hit but cooling down (penalty %ds)", self._auto_penalty)
             return
         instance = self.instance_provider() if self.instance_provider else None
         if instance is None:
             return
         self._auto_armed = False
+        self._auto_key = key
         self._auto_last = time.time()
         self.solve(instance, auto=True)
 
@@ -618,6 +642,10 @@ class ClueHelper(QObject):
         """Escalating cooldown for fruitless auto solves so a persistent
         false trigger can't grind the machine; any real result resets it."""
         if not self._auto_solving:
+            # a manual solve answered whatever is on screen; don't auto-solve
+            # the same content again right after
+            self._auto_key = self._seen_key or self._auto_key
+            self._auto_armed = False
             return
         if productive:
             self._auto_penalty = AUTO_COOLDOWN_S
