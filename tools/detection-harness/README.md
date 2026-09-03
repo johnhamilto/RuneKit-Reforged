@@ -21,3 +21,9 @@ Run:
 Files: `alt1port.py` (faithful Alt1 ports), `confidence.py` (ZNCC detection,
 template-based soft OCR, clue DB fuzzy match, Apple Vision wrapper),
 `run_harness.py`, `part2_experiments.py`.
+
+Celtic knot reader check on saved 1x crops (the app leaves one at
+`<config>/RuneKit/debug_knot_reject.png` after a failed read; keep good ones
+in `frames/knot_*.png`):
+
+    python knot_check.py --rings 16,16,16,0 --crossings 8 frames/knot_3ring_1233.png
