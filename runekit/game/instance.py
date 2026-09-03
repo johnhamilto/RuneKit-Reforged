@@ -68,7 +68,9 @@ class GameInstance(QObject):
     world = Property(int, get_world, notify=worldChanged)
 
     @abc.abstractmethod
-    def grab_game(self) -> ImageType:
+    def grab_game(self, max_age_ms: int | None = None) -> ImageType:
+        """Capture the game window. Frames are reused for refresh_rate ms;
+        max_age_ms tightens that for one call."""
         ...
 
     @abc.abstractmethod

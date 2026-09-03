@@ -44,8 +44,9 @@ class QtGrabMixin(QtBaseMixin):
     __game_last_grab = 0.0
     __game_last_image = None
 
-    def grab_game(self) -> np.ndarray:
-        if (time.monotonic() - self.__game_last_grab) * 1000 < self.refresh_rate:
+    def grab_game(self, max_age_ms: int | None = None) -> np.ndarray:
+        ttl = self.refresh_rate if max_age_ms is None else max_age_ms
+        if (time.monotonic() - self.__game_last_grab) * 1000 < ttl:
             return self.__game_last_image
 
         screen = QGuiApplication.primaryScreen()

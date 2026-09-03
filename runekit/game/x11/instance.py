@@ -117,8 +117,9 @@ class X11GameInstance(QtGrabMixin, QtEmbedMixin, PsUtilNetStat, GameInstance):
         # TODO: If progress = 1 set urgency flag
         pass
 
-    def grab_game(self):
-        if (time.monotonic() - self.game_last_grab) * 1000 < self.refresh_rate:
+    def grab_game(self, max_age_ms: int | None = None):
+        ttl = self.refresh_rate if max_age_ms is None else max_age_ms
+        if (time.monotonic() - self.game_last_grab) * 1000 < ttl:
             return self.game_last_image
 
         xid = shm = None

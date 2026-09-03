@@ -252,9 +252,10 @@ class QuartzGameInstance(PsUtilNetStat, GameInstance):
             == self.pid
         )
 
-    def grab_game(self) -> Image:
+    def grab_game(self, max_age_ms: int | None = None) -> Image:
         # FIXME: Crop title bar
-        if (time.monotonic() - self.__game_last_grab) * 1000 < self.refresh_rate:
+        ttl = self.refresh_rate if max_age_ms is None else max_age_ms
+        if (time.monotonic() - self.__game_last_grab) * 1000 < ttl:
             return self.__game_last_image
 
         bounds = self.get_position()
