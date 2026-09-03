@@ -33,12 +33,16 @@ logger = logging.getLogger(__name__)
 OVERLAY_MOVES = 25
 OVERLAY_TIMEOUT_MS = 20000
 
-AUTO_INTERVAL_MS = 1200
-AUTO_OCR_FLOOR_S = 8  # run OCR at least this often even with no screen change
+AUTO_INTERVAL_MS = 400
+AUTO_OCR_FLOOR_S = 8  # full-frame OCR at least this often even with no screen change
+AUTO_WIDEN_MISSES = 2  # empty band/window passes before widening to the full frame
+AUTO_PROBE_S = 2  # full-frame slide sprite probe cadence once a scale hint exists
+AUTO_SWEEP_S = 20  # multi-scale slide sweep cadence until a scale hint exists
 AUTO_COOLDOWN_S = 10
 AUTO_REARM_MISSES = 2
 SCREEN_TITLES = ("mysterious clue scroll", "treasure map", "lockbox", "towers", "celtic knot")
 SCREEN_WIDTH = 1700  # frames are shrunk to this for fast screening
+SLIDE_ZNCC = 0.95
 
 
 def _content_key(title_line: dict, lines: list) -> str:
@@ -84,11 +88,36 @@ def _load_hint(cache_dir: Path):
         return None
 
 
+def _title_band(box, size) -> tuple:
+    """Frame-pixel band holding an interface titled at ``box`` (normalized,
+    origin bottom-left) and the text below it that _content_key reads."""
+    width, height = size
+    top = (1 - box[1] - box[3]) * height
+    bottom = (1 - box[1]) * height
+    return (0, max(0, int(top - 0.05 * height)), width, min(height, int(bottom + 0.45 * height)))
+
+
+def _rebase(line: dict, band, size) -> dict:
+    """Map a line box from band-normalized to frame-normalized coordinates,
+    so keys from a band pass match those from a full-frame pass."""
+    x, y, w, h = line["box"]
+    bx0, by0, bx1, by1 = band
+    bw, bh = bx1 - bx0, by1 - by0
+    fw, fh = size
+    return {
+        **line,
+        "box": ((bx0 + x * bw) / fw, (fh - by1 + y * bh) / fh, w * bw / fw, h * bh / fh),
+    }
+
+
 class _ScanThread(QThread):
     """Cheap screen check for a clue-like interface: fast OCR for known
     titles at reduced resolution, plus a slide needle probe once a scale
-    hint exists. Hits carry a fingerprint of the text near the title so
-    the caller can tell a new clue from the same one sitting open."""
+    hint exists. After a hit the OCR runs on a band around the title and
+    the probe in a window around the sprite; a full-frame pass on the floor
+    cadence, or after a few empty band passes, catches interfaces that
+    opened somewhere else. Hits carry a fingerprint of the text near the
+    title so the caller can tell a new clue from the same one sitting open."""
 
     verdict = Signal(bool, str)
 
@@ -97,37 +126,52 @@ class _ScanThread(QThread):
         self.instance = None
         self.cache_dir = cache_dir
         self._runs = 0
-        self._thumb = None
-        self._last_ocr = 0.0
+        self._thumbs = {"full": None, "band": None}
+        self._last_full = 0.0
+        self._band = None  # frame-pixel box around the last title seen
+        self._band_misses = 0
+        self._slide_at = None  # frame-pixel position of the last slide sprite hit
+        self._slide_misses = 0
+        self._slide_needle = None  # (scale hint, template degraded to it)
+        self._last_probe = 0.0
+        self._last_sweep = 0.0
 
-    def _changed(self, frame: Image.Image) -> bool:
+    def _changed(self, area: Image.Image, mode: str) -> bool:
         """Cheap screen-change check: interfaces opening or scroll text
         advancing move a large share of pixels; ambient animation doesn't."""
         thumb = np.asarray(
-            frame.convert("L").resize((120, 78), Image.BILINEAR), dtype=np.int16
+            area.convert("L").resize((120, 78), Image.BILINEAR), dtype=np.int16
         )
-        prev, self._thumb = self._thumb, thumb
+        prev, self._thumbs[mode] = self._thumbs[mode], thumb
         if prev is None:
             return True
         return float((np.abs(thumb - prev) > 15).mean()) > 0.05
 
     def run(self):
         try:
+            started = time.perf_counter()
             self._runs += 1
-            frame = solver._to_image(self.instance.grab_game())
-            # OCR only when the screen changed (or on the periodic floor);
-            # an unchanged tick emits nothing and costs a few milliseconds
-            if not self._changed(frame) and time.time() - self._last_ocr < AUTO_OCR_FLOOR_S:
+            frame = solver._to_image(self.instance.grab_game(max_age_ms=AUTO_INTERVAL_MS // 2))
+            now = time.time()
+            floor_due = now - self._last_full >= AUTO_OCR_FLOOR_S
+            band = None
+            if self._band is not None and not floor_due and self._band_misses < AUTO_WIDEN_MISSES:
+                band = self._band
+            area = frame if band is None else frame.crop(band)
+            # OCR only when the screened area changed (or on the periodic
+            # floor); an unchanged tick emits nothing and costs a few ms
+            if not self._changed(area, "band" if band else "full") and not floor_due:
                 return
-            self._last_ocr = time.time()
-            if frame.width > SCREEN_WIDTH:
-                frame_small = frame.resize(
-                    (SCREEN_WIDTH, round(frame.height * SCREEN_WIDTH / frame.width)),
+            if band is None:
+                self._last_full = now
+            if area.width > SCREEN_WIDTH:
+                area = area.resize(
+                    (SCREEN_WIDTH, round(area.height * SCREEN_WIDTH / area.width)),
                     Image.BILINEAR,
                 )
-            else:
-                frame_small = frame
-            lines = vision.ocr_lines(frame_small, fast=True)
+            lines = vision.ocr_lines(area, fast=True)
+            if band is not None:
+                lines = [_rebase(line, band, frame.size) for line in lines]
             best = (0.0, "", "")
             for line in lines:
                 for t in SCREEN_TITLES:
@@ -140,30 +184,88 @@ class _ScanThread(QThread):
                 None,
             )
             logger.log(
-                logging.INFO if title or self._runs % 15 == 1 else logging.DEBUG,
-                "Screening #%d: %d lines, best %r vs %r (%.2f), hit=%s",
-                self._runs, len(lines), best[1], best[2], best[0], title is not None,
+                logging.INFO if title or self._runs % 45 == 1 else logging.DEBUG,
+                "Screening #%d (%s, %.0f ms): %d lines, best %r vs %r (%.2f), hit=%s",
+                self._runs, "band" if band else "full", (time.perf_counter() - started) * 1000,
+                len(lines), best[1], best[2], best[0], title is not None,
             )
             if title is not None:
+                # keep the band (and its change-gate thumbnail) unless the
+                # title really moved; OCR boxes jitter by a pixel or two
+                new_band = _title_band(title["box"], frame.size)
+                if self._band is None or max(
+                    abs(a - b) for a, b in zip(new_band, self._band)
+                ) > 12:
+                    self._band, self._thumbs["band"] = new_band, None
+                self._band_misses = 0
                 self.verdict.emit(True, _content_key(title, lines))
                 return
-            # slide puzzles have no title; probe for the interface sprite.
-            # Cheap with a scale hint, so do the full sweep only occasionally
-            # until one is known.
-            hint = _load_hint(self.cache_dir)
-            if hint or self._runs % 8 == 1:
-                needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
-                m = detection.calibrate_scale(detection.to_array(frame), needle, hint=hint)
-                # the sprite is just a close button; other interfaces' X
-                # buttons flicker up to ~0.9, a real slide modal ~0.99
-                if m.ok and m.zncc >= 0.95:
-                    logger.info("Screening #%d: slide sprite hit (zncc %.2f)", self._runs, m.zncc)
-                    self.verdict.emit(True, f"slide:{m.x // 20},{m.y // 20}")
-                    return
+            if band is not None:
+                self._band_misses += 1
+            m = self._probe_slide(frame, now)
+            if m is not None:
+                logger.info("Screening #%d: slide sprite hit (zncc %.2f)", self._runs, m.zncc)
+                self.verdict.emit(True, f"slide:{m.x // 20},{m.y // 20}")
+                return
             self.verdict.emit(False, "")
         except Exception:
             logger.debug("Clue screening failed", exc_info=True)
             self.verdict.emit(False, "")
+
+    def _probe_slide(self, frame: Image.Image, now: float):
+        """Slide puzzles have no title; look for the interface's close button.
+        With a scale hint that is one single-scale match: in a window around
+        the last hit when there was one, over the whole frame on a slower
+        cadence. The multi-scale sweep runs only until a hint exists, and
+        rarely, because it costs seconds."""
+        hint = _load_hint(self.cache_dir)
+        if not hint:
+            if now - self._last_sweep < AUTO_SWEEP_S:
+                return None
+            self._last_sweep = now
+            needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
+            m = detection.calibrate_scale(detection.to_array(frame), needle)
+            if m.ok and m.zncc >= SLIDE_ZNCC:
+                self._slide_at, self._slide_misses = (m.x, m.y), 0
+                return m
+            return None
+        if self._slide_needle is None or self._slide_needle[0] != hint:
+            needle = detection.to_array(ClueAssets(self.cache_dir).needle("slide"))
+            self._slide_needle = (hint, detection.degrade_template(needle, hint))
+        template = self._slide_needle[1]
+        th, tw = template.shape[:2]
+        if self._slide_at is not None and self._slide_misses < AUTO_WIDEN_MISSES:
+            x, y = self._slide_at
+            box = (
+                max(0, x - 60), max(0, y - 60),
+                min(frame.width, x + tw + 60), min(frame.height, y + th + 60),
+            )
+            m = self._match(frame.crop(box), hint, template, box[0], box[1])
+            if m is not None:
+                self._slide_misses = 0
+                return m
+            self._slide_misses += 1
+        if now - self._last_probe < AUTO_PROBE_S:
+            return None
+        self._last_probe = now
+        m = self._match(frame, hint, template, 0, 0)
+        if m is not None:
+            self._slide_at, self._slide_misses = (m.x, m.y), 0
+        return m
+
+    @staticmethod
+    def _match(image: Image.Image, scale: float, template: np.ndarray, ox: int, oy: int):
+        arr = detection.to_array(image)
+        th, tw = template.shape[:2]
+        if arr.shape[0] <= th or arr.shape[1] <= tw:
+            return None
+        x, y = detection.locate(arr, template)
+        score = detection.zncc(arr, template, x, y)
+        # the sprite is just a close button; other interfaces' X buttons
+        # flicker up to ~0.9, a real slide modal ~0.99
+        if score < SLIDE_ZNCC:
+            return None
+        return detection.Match(scale=scale, x=ox + int(x), y=oy + int(y), zncc=score, margin=0.0)
 
 
 class _SolveThread(QThread):
