@@ -458,16 +458,18 @@ class ClueHelper(QObject):
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(AUTO_INTERVAL_MS)
         self._auto_timer.timeout.connect(self._auto_tick)
-        if QSettings().value("cluehelper/auto_detect", False, bool):
-            self._auto_timer.start()
+        self._window_open = False
 
     @property
     def window(self) -> "window_mod.ClueSolverWindow":
         if self._window is None:
             self._window = window_mod.ClueSolverWindow()
             self._window.solve_requested.connect(self.solve_requested)
-            self._window.auto_check.setChecked(self._auto_timer.isActive())
+            self._window.auto_check.setChecked(
+                QSettings().value("cluehelper/auto_detect", False, bool)
+            )
             self._window.auto_toggled.connect(self.set_auto_detect)
+            self._window.visibility_changed.connect(self._on_window_visibility)
         return self._window
 
     def show_error(self, message: str):
@@ -477,10 +479,21 @@ class ClueHelper(QObject):
     @Slot(bool)
     def set_auto_detect(self, on: bool):
         QSettings().setValue("cluehelper/auto_detect", on)
-        if on and not self._auto_timer.isActive():
+        self._sync_auto()
+
+    @Slot(bool)
+    def _on_window_visibility(self, visible: bool):
+        self._window_open = visible
+        self._sync_auto()
+
+    def _sync_auto(self):
+        """Screen the game only while the solver window is open with
+        auto-detect on; each pass captures the whole window."""
+        want = self._window_open and QSettings().value("cluehelper/auto_detect", False, bool)
+        if want and not self._auto_timer.isActive():
             self._auto_armed = True
             self._auto_timer.start()
-        elif not on:
+        elif not want and self._auto_timer.isActive():
             self._auto_timer.stop()
 
     def _auto_tick(self):

@@ -221,6 +221,7 @@ def render_compass(bearing_deg: float) -> QPixmap:
 class ClueSolverWindow(QWidget):
     solve_requested = Signal()
     auto_toggled = Signal(bool)
+    visibility_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
@@ -295,3 +296,11 @@ class ClueSolverWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.visibility_changed.emit(True)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.visibility_changed.emit(False)
