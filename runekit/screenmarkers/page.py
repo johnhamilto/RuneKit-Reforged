@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 COLUMNS = ("Show", "Name", "Border", "Fill", "Width", "Label")
 if sys.platform == "darwin":
-    HINT = f"Hold {EDIT_KEY} over the game to move a marker or drag its edges and corners to resize it."
+    HINT = f"Hold {EDIT_KEY} over the game: drag a marker to move it, drag its edges or corners to resize it, right-click it to remove it."
 else:
     HINT = "Moving and resizing markers with the mouse is not available on this platform yet."
 

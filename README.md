@@ -213,8 +213,9 @@ in the spirit of RuneLite's screen markers. Choose **Add Screen Marker**
 from the tray icon and drag out the rectangle. Markers follow the game
 window, hide while another app is in front, and persist across restarts.
 
-Hold **Option** over the game and drag a marker to move it, or drag its
-edges and corners to resize it. Clicks anywhere else still reach the game.
+Hold **Option** over the game and drag a marker to move it, drag its edges
+and corners to resize it, or right-click it to remove it. Clicks anywhere
+else still reach the game.
 **Edit Screen Markers** in the tray menu keeps markers editable without
 holding Option, and **Show Screen Markers** hides them all without deleting
 anything. Moving and resizing with the mouse needs the macOS input hook;

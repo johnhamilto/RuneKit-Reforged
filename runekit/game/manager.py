@@ -21,10 +21,11 @@ class GameManager(QObject):
     instance_changed = Signal()
     # Alt (Option on macOS) went down or up while the game was in front
     alt_changed = Signal(bool)
-    # While set_mouse_capture(True) is on, left-button events are offered to
-    # mouse_hook(kind, x, y) with kind "down", "drag" or "up" and screen
-    # coordinates; a truthy return swallows the event. Platforms without a
-    # way to intercept input leave set_mouse_capture as a no-op.
+    # While set_mouse_capture(True) is on, mouse events are offered to
+    # mouse_hook(kind, x, y) in screen coordinates: kind is "down", "drag"
+    # or "up" for the left button and "right" for a right press. A truthy
+    # return swallows the event (and the matching right release). Platforms
+    # without a way to intercept input leave set_mouse_capture as a no-op.
     mouse_hook = None
 
     def set_mouse_capture(self, on: bool):

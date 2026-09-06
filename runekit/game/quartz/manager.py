@@ -30,7 +30,8 @@ class QuartzGameManager(GameManager):
         self._alt_down = False
         self._mouse_tap = None
         self._mouse_capture = False
-        self._mouse_held = False  # a swallowed press is waiting for its release
+        self._mouse_held = False  # a swallowed left press is waiting for its release
+        self._right_held = False
         self.request_accessibility_popup.connect(self.accessibility_popup)
         self._setup_tap()
 
@@ -167,6 +168,8 @@ class QuartzGameManager(GameManager):
                 Quartz.kCGEventLeftMouseDown,
                 Quartz.kCGEventLeftMouseDragged,
                 Quartz.kCGEventLeftMouseUp,
+                Quartz.kCGEventRightMouseDown,
+                Quartz.kCGEventRightMouseUp,
             ]
             mask = reduce(lambda a, b: a | b, [Quartz.CGEventMaskBit(e) for e in events])
             self._mouse_tap = Quartz.CGEventTapCreate(
@@ -185,7 +188,7 @@ class QuartzGameManager(GameManager):
                 Quartz.CFRunLoopGetCurrent(), source, Quartz.kCFRunLoopCommonModes
             )
             return  # a new tap starts enabled
-        if on or not self._mouse_held:
+        if on or not (self._mouse_held or self._right_held):
             Quartz.CGEventTapEnable(self._mouse_tap, on)
 
     def _on_mouse(self, proxy, type_, event, _):
@@ -199,6 +202,16 @@ class QuartzGameManager(GameManager):
             if not self._mouse_capture:
                 return event
             kind = "down"
+        elif type_ == Quartz.kCGEventRightMouseDown:
+            if not self._mouse_capture:
+                return event
+            kind = "right"
+        elif type_ == Quartz.kCGEventRightMouseUp:
+            if not self._right_held:
+                return event
+            self._right_held = False  # the press was swallowed, so is its release
+            self._settle_tap()
+            return None
         elif not self._mouse_held:
             return event  # the press went to the game, so does the rest
         else:
@@ -211,11 +224,16 @@ class QuartzGameManager(GameManager):
             consumed = False
         if kind == "down":
             self._mouse_held = consumed
+        elif kind == "right":
+            self._right_held = consumed
         elif kind == "up":
             self._mouse_held = False
-            if not self._mouse_capture:
-                Quartz.CGEventTapEnable(self._mouse_tap, False)
+            self._settle_tap()
         return None if consumed else event
+
+    def _settle_tap(self):
+        if not (self._mouse_capture or self._mouse_held or self._right_held):
+            Quartz.CGEventTapEnable(self._mouse_tap, False)
 
     @Slot()
     def accessibility_popup(self):

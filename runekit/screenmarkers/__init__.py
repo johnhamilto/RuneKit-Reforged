@@ -4,8 +4,8 @@ window around; they show only while the game or RuneKit is in front.
 
 Editing never puts a RuneKit window under the mouse: macOS treats an
 Option-click on another app's window as an app switch and hides the game.
-Instead the platform manager intercepts left-button events while editing is
-on and offers them to on_mouse, which drags the marker and redraws it on the
+Instead the platform manager intercepts mouse events while editing is on and
+offers them to on_mouse, which drags or removes the marker and redraws the
 click-through overlay."""
 
 import json
@@ -234,34 +234,44 @@ class ScreenMarkers(QObject):
         self._render()
 
     def on_mouse(self, kind: str, x: float, y: float) -> bool:
-        """Left-button event from the platform while capture is on; True swallows it."""
-        if kind == "down":
+        """Mouse event from the platform while capture is on; True swallows it.
+        kind is "down", "drag" or "up" for the left button, "right" for a right press.
+        """
+        if kind in ("down", "right"):
             if (
                 not self._editing
                 or self._origin is None
                 or self._group is None
                 or not self._group.isVisible()
+                or (kind == "right" and self._drag is not None)
             ):
                 return False
-            local = QPoint(int(x) - self._origin.x(), int(y) - self._origin.y())
+            local = self._local(x, y)
             for marker in reversed(self.markers):
                 if not marker.visible:
                     continue
                 mode = hit_side(local, marker.rect())
-                if mode is not None:
+                if mode is None:
+                    continue
+                if kind == "right":
+                    logger.info("Removed marker %r with a right-click", marker.name)
+                    self.remove(marker)
+                else:
                     self._drag = (marker, mode, local, marker.rect())
-                    return True
+                return True
             return False
         if self._drag is None:
             return False
         marker, mode, start, start_rect = self._drag
-        local = QPoint(int(x) - self._origin.x(), int(y) - self._origin.y())
-        marker.set_rect(dragged_rect(start_rect, mode, local - start))
+        marker.set_rect(dragged_rect(start_rect, mode, self._local(x, y) - start))
         self._place(marker)
         if kind == "up":
             self._drag = None
             self.commit()
         return True
+
+    def _local(self, x: float, y: float) -> QPoint:
+        return QPoint(int(x) - self._origin.x(), int(y) - self._origin.y())
 
     # ------------------------------------------------------------- overlay
 
