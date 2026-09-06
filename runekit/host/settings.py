@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .appstore_model import AppStoreModel
+from ..screenmarkers.page import MarkersPage
 from ..ui import TooltipNotifier, TrayIconNotifier, AutoNotifier
 
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ class SettingsDialog(QMainWindow):
         tab = QTabWidget(self)
         tab.addTab(ApplicationPage(self.host, parent=self), "Applications")
         tab.addTab(InterfacePage(self.host, parent=self), "Interface")
+        tab.addTab(MarkersPage(self.host, parent=self), "Screen Markers")
 
         self.setCentralWidget(tab)
         self.setContentsMargins(11, 11, 11, 11)

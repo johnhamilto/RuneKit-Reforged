@@ -206,6 +206,24 @@ minute depending on the clue type.
 
 ---
 
+## Screen Markers
+
+Draw persistent rectangles over the game window to mark interface areas,
+in the spirit of RuneLite's screen markers. Choose **Add Screen Marker**
+from the tray icon and drag out the rectangle. Markers follow the game
+window, hide while another app is in front, and persist across restarts.
+
+Hold **Option** (macOS) over the game and drag a marker to move it, or drag
+its edges and corners to resize it. On Linux, tick **Edit Screen Markers**
+in the tray menu instead and untick it when done. **Show Screen Markers**
+in the tray menu hides them all without deleting anything.
+
+The **Screen Markers** tab in Settings renames markers, sets border and
+fill colors and border width, toggles labels, and imports or exports the
+whole set as JSON through the clipboard.
+
+---
+
 ## Troubleshooting
 
 ### "No game instance found"

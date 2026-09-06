@@ -10,6 +10,7 @@ from runekit.app import App, AppStore
 from runekit.app.store import app_id
 from runekit.cluehelper import ClueHelper
 from runekit.host.settings import SettingsDialog
+from runekit.screenmarkers import ScreenMarkers
 from runekit.ui import AutoNotifier
 from runekit.ui.tray import TrayIcon
 
@@ -30,6 +31,8 @@ class Host:
         self.notifier = AutoNotifier()
         self.app_store = AppStore()
         self.clue_helper = ClueHelper()
+        self.screen_markers = ScreenMarkers()
+        self.screen_markers.instance_provider = self._clue_instance
         self.tray_icon = TrayIcon(self)
         self.setting_dialog = SettingsDialog(self)
         self.tray_icon.show()
@@ -40,6 +43,10 @@ class Host:
         self.tray_icon.on_solve_clue.connect(self.solve_clue)
         self.clue_helper.solve_requested.connect(self.solve_clue)
         self.clue_helper.instance_provider = self._clue_instance
+        self.tray_icon.on_add_marker.connect(self.screen_markers.add_marker)
+        self.tray_icon.on_show_markers.connect(self.screen_markers.set_shown)
+        self.tray_icon.on_edit_markers.connect(self.screen_markers.pin_editing)
+        self.manager.alt_changed.connect(self.screen_markers.on_alt)
         self.manager.instance_removed.connect(self.on_game_quit)
 
     def on_before_quit(self):

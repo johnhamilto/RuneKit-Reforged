@@ -19,6 +19,8 @@ class GameManager(QObject):
     instance_added = Signal(GameInstance)
     instance_removed = Signal(GameInstance)
     instance_changed = Signal()
+    # Alt (Option on macOS) went down or up while the game was in front
+    alt_changed = Signal(bool)
     instances = Property(list, get_instances, notify=instance_changed)
 
     def stop(self):

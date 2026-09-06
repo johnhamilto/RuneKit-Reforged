@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 class TrayIcon(QSystemTrayIcon):
     on_settings = Signal()
     on_solve_clue = Signal()
+    on_add_marker = Signal()
+    on_show_markers = Signal(bool)
+    on_edit_markers = Signal(bool)
 
     host: "Host"
 
@@ -35,6 +38,18 @@ class TrayIcon(QSystemTrayIcon):
         self.menu.addSeparator()
         self.menu_solve_clue = self.menu.addAction("Solve Clue on Screen")
         self.menu_solve_clue.triggered.connect(self.on_solve_clue)
+        self.menu.addSeparator()
+        self.menu_add_marker = self.menu.addAction("Add Screen Marker")
+        self.menu_add_marker.triggered.connect(self.on_add_marker)
+        self.menu_show_markers = self.menu.addAction("Show Screen Markers")
+        self.menu_show_markers.setCheckable(True)
+        self.menu_show_markers.setChecked(self.host.screen_markers.shown)
+        self.menu_show_markers.toggled.connect(self.on_show_markers)
+        self.menu_edit_markers = self.menu.addAction("Edit Screen Markers")
+        self.menu_edit_markers.setCheckable(True)
+        self.menu_edit_markers.setChecked(self.host.screen_markers.pinned)
+        self.menu_edit_markers.toggled.connect(self.on_edit_markers)
+        self.menu.addSeparator()
         self.menu_settings = self.menu.addAction("Settings")
         self.menu_settings.triggered.connect(self.on_settings)
         self.menu.addAction(

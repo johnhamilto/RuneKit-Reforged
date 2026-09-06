@@ -25,6 +25,7 @@ class QuartzGameManager(GameManager):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._instances = {}
+        self._alt_down = False
         self.request_accessibility_popup.connect(self.accessibility_popup)
         self._setup_tap()
 
@@ -43,6 +44,7 @@ class QuartzGameManager(GameManager):
             Quartz.kCGEventLeftMouseDown,
             Quartz.kCGEventRightMouseDown,
             Quartz.kCGEventKeyDown,
+            Quartz.kCGEventFlagsChanged,
         ]
         events = [Quartz.CGEventMaskBit(e) for e in events]
         event_mask = reduce(lambda a, b: a | b, events)
@@ -114,6 +116,9 @@ class QuartzGameManager(GameManager):
             return event
 
         nsevent = Quartz.NSEvent.eventWithCGEvent_(event)
+        if nsevent.type() == Quartz.NSEventTypeFlagsChanged:
+            self._on_flags_changed(nsevent)
+            return event
         if nsevent.type() == Quartz.NSEventTypeKeyDown:
             front_app = Quartz.NSWorkspace.sharedWorkspace().frontmostApplication()
             instance = self.get_instance_by_pid(front_app.processIdentifier())
@@ -135,6 +140,18 @@ class QuartzGameManager(GameManager):
         instance.game_activity.emit()
 
         return event
+
+    def _on_flags_changed(self, nsevent):
+        alt = bool(nsevent.modifierFlags() & Quartz.NSEventModifierFlagOption)
+        if alt == self._alt_down:
+            return
+        if alt:
+            front_app = Quartz.NSWorkspace.sharedWorkspace().frontmostApplication()
+            if not self.get_instance_by_pid(front_app.processIdentifier()):
+                return
+        self._alt_down = alt
+        # leave the tap callback before any window work happens
+        QTimer.singleShot(0, lambda: self.alt_changed.emit(alt))
 
     @Slot()
     def accessibility_popup(self):
