@@ -1,15 +1,31 @@
 """Persistent rectangles over the game window, in the spirit of RuneLite's
 screen markers. Markers live in game window coordinates, so they follow the
-window around; they show only while the game or RuneKit is in front."""
+window around; they show only while the game or RuneKit is in front.
+
+Editing never puts a RuneKit window under the mouse: macOS treats an
+Option-click on another app's window as an app switch and hides the game.
+Instead the platform manager intercepts left-button events while editing is
+on and offers them to on_mouse, which drags the marker and redraws it on the
+click-through overlay."""
 
 import json
 import logging
 import sys
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Callable, List, Optional, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QRect, QRectF, QSettings, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import (
+    QObject,
+    QPoint,
+    QRect,
+    QRectF,
+    QSettings,
+    QTimer,
+    Qt,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QPen
 from PySide6.QtWidgets import (
     QGraphicsItemGroup,
@@ -18,10 +34,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from .surfaces import DrawSurface, MarkerPanel, label_font
+from .geometry import HANDLE, dragged_rect, hit_side
+from .surfaces import DrawSurface, label_font
 
 if TYPE_CHECKING:
-    from runekit.game import GameInstance
+    from runekit.game import GameInstance, GameManager
 
 logger = logging.getLogger(__name__)
 
@@ -86,18 +103,23 @@ class Marker:
 class ScreenMarkers(QObject):
     changed = Signal()  # markers were added, removed, or edited
 
-    def __init__(self, parent=None):
+    def __init__(self, manager: "GameManager", parent=None):
         super().__init__(parent=parent)
         self.instance_provider: Optional[Callable[[], Optional["GameInstance"]]] = None
         self.markers: List[Marker] = []
         self.shown = QSettings().value(SHOWN_KEY, True, bool)
         self.pinned = False  # edit mode held on from the tray menu
+        self._manager = manager
         self._alt = False  # edit mode while Alt/Option is held
+        self._editing = False
+        self._drag = None  # (marker, mode, start point, start rect) during a drag
+        self._origin: Optional[QPoint] = None  # game window top-left on screen
         self._instance = None
         self._group = None
-        self._panels: List[MarkerPanel] = []
+        self._items: Dict[str, dict] = {}
         self._draw: Optional[DrawSurface] = None
         self._load()
+        manager.mouse_hook = self.on_mouse
         QGuiApplication.instance().applicationStateChanged.connect(
             self._update_visibility
         )
@@ -170,9 +192,9 @@ class ScreenMarkers(QObject):
             self._draw = DrawSurface()
             self._draw.drawn.connect(self._on_drawn)
             self._draw.cancelled.connect(self._apply_edit)
-        self._close_panels()
         style = Marker("", 0, 0, 0, 0)
         self._draw.begin(instance.get_position(), style.pen(), style.brush())
+        self._apply_edit()
 
     @Slot(QRect)
     def _on_drawn(self, rect: QRect):
@@ -197,40 +219,49 @@ class ScreenMarkers(QObject):
     def _apply_edit(self, *_):
         drawing = self._draw is not None and self._draw.isVisible()
         want = (self._alt or self.pinned) and self.shown and not drawing
-        if not want:
-            if self._panels and not any(p.dragging for p in self._panels):
-                self._close_panels()
+        if want == self._editing:
             return
-        wanted = [m for m in self.markers if m.visible]
-        if [p.marker for p in self._panels] == wanted:
-            return
-        if any(p.dragging for p in self._panels):
-            return
-        self._close_panels()
-        instance = self._acquire()
-        if instance is None or not wanted:
-            return
-        origin = instance.get_position().topLeft()
-        for marker in wanted:
-            panel = MarkerPanel(marker, origin)
-            panel.moved.connect(self._on_panel_moved)
-            panel.show()
-            self._panels.append(panel)
-        logger.debug("Marker editing on: %d panels at %s", len(self._panels), origin)
-        self._update_visibility()
+        if not want and self._drag is not None:
+            return  # finish the drag first; on_mouse comes back here on release
+        if want:
+            instance = self._acquire()
+            if instance is None:
+                return
+            self._origin = instance.get_position().topLeft()
+        self._editing = want
+        logger.debug("Marker editing %s", "on" if want else "off")
+        self._manager.set_mouse_capture(want)
+        self._render()
 
-    def _close_panels(self):
-        if self._panels:
-            logger.debug("Marker editing off")
-        for panel in self._panels:
-            panel.hide()
-            panel.deleteLater()
-        self._panels = []
-        self._update_visibility()
-
-    @Slot()
-    def _on_panel_moved(self):
-        self.commit()
+    def on_mouse(self, kind: str, x: float, y: float) -> bool:
+        """Left-button event from the platform while capture is on; True swallows it."""
+        if kind == "down":
+            if (
+                not self._editing
+                or self._origin is None
+                or self._group is None
+                or not self._group.isVisible()
+            ):
+                return False
+            local = QPoint(int(x) - self._origin.x(), int(y) - self._origin.y())
+            for marker in reversed(self.markers):
+                if not marker.visible:
+                    continue
+                mode = hit_side(local, marker.rect())
+                if mode is not None:
+                    self._drag = (marker, mode, local, marker.rect())
+                    return True
+            return False
+        if self._drag is None:
+            return False
+        marker, mode, start, start_rect = self._drag
+        local = QPoint(int(x) - self._origin.x(), int(y) - self._origin.y())
+        marker.set_rect(dragged_rect(start_rect, mode, local - start))
+        self._place(marker)
+        if kind == "up":
+            self._drag = None
+            self.commit()
+        return True
 
     # ------------------------------------------------------------- overlay
 
@@ -270,12 +301,11 @@ class ScreenMarkers(QObject):
         self._acquire()
         if self._instance is not None and self._group is None and self.markers:
             self._render()
+        self._apply_edit()
 
     @Slot(QRect)
     def _on_moved(self, rect: QRect):
-        for panel in self._panels:
-            panel.origin = rect.topLeft()
-            panel.sync()
+        self._origin = rect.topLeft()
 
     def _render(self):
         if self._group is not None:
@@ -286,6 +316,7 @@ class ScreenMarkers(QObject):
             except RuntimeError:
                 pass  # the overlay already dropped it with the game window
             self._group = None
+        self._items = {}
         if self._instance is None or not self.markers:
             return
         try:
@@ -296,9 +327,10 @@ class ScreenMarkers(QObject):
         for marker in self.markers:
             if not marker.visible:
                 continue
-            rect = QGraphicsRectItem(QRectF(marker.rect()), group)
+            rect = QGraphicsRectItem(group)
             rect.setPen(marker.pen())
             rect.setBrush(marker.brush())
+            entry = {"rect": rect, "label": None, "handles": []}
             if marker.label:
                 color = QColor(marker.border)
                 color.setAlpha(255)
@@ -306,10 +338,34 @@ class ScreenMarkers(QObject):
                 text.setFont(label_font())
                 text.setBrush(QBrush(color))
                 text.setPen(QPen(QColor(0, 0, 0), 0.5))
-                inset = marker.thickness // 2
-                text.setPos(marker.x + inset + 3, marker.y + inset + 2)
+                entry["label"] = text
+            if self._editing:
+                for _ in range(8):
+                    handle = QGraphicsRectItem(group)
+                    handle.setPen(QPen(QColor(0, 0, 0), 1))
+                    handle.setBrush(QBrush(QColor(255, 255, 255)))
+                    entry["handles"].append(handle)
+            self._items[marker.id] = entry
+            self._place(marker)
         self._group = group
         self._update_visibility()
+
+    def _place(self, marker: Marker):
+        entry = self._items.get(marker.id)
+        if entry is None:
+            return
+        rect = marker.rect()
+        entry["rect"].setRect(QRectF(rect))
+        if entry["label"] is not None:
+            inset = marker.thickness // 2
+            entry["label"].setPos(rect.x() + inset + 3, rect.y() + inset + 2)
+        if entry["handles"]:
+            xs = (rect.left(), rect.center().x(), rect.right())
+            ys = (rect.top(), rect.center().y(), rect.bottom())
+            spots = [(x, y) for x in xs for y in ys if (x, y) != (xs[1], ys[1])]
+            half = HANDLE / 2
+            for handle, (x, y) in zip(entry["handles"], spots):
+                handle.setRect(x - half, y - half, HANDLE, HANDLE)
 
     def _update_visibility(self, *_):
         if self._group is None:
@@ -317,4 +373,4 @@ class ScreenMarkers(QObject):
         in_front = (self._instance is not None and self._instance.is_focused()) or (
             QGuiApplication.applicationState() == Qt.ApplicationState.ApplicationActive
         )
-        self._group.setVisible(self.shown and not self._panels and in_front)
+        self._group.setVisible(self.shown and in_front)

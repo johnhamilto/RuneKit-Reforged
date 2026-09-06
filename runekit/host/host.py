@@ -31,7 +31,7 @@ class Host:
         self.notifier = AutoNotifier()
         self.app_store = AppStore()
         self.clue_helper = ClueHelper()
-        self.screen_markers = ScreenMarkers()
+        self.screen_markers = ScreenMarkers(self.manager)
         self.screen_markers.instance_provider = self._clue_instance
         self.tray_icon = TrayIcon(self)
         self.setting_dialog = SettingsDialog(self)

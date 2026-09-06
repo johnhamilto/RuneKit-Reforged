@@ -30,7 +30,7 @@ COLUMNS = ("Show", "Name", "Border", "Fill", "Width", "Label")
 if sys.platform == "darwin":
     HINT = f"Hold {EDIT_KEY} over the game to move a marker or drag its edges and corners to resize it."
 else:
-    HINT = "Turn on Edit Screen Markers in the tray menu to move a marker or drag its edges and corners to resize it."
+    HINT = "Moving and resizing markers with the mouse is not available on this platform yet."
 
 
 class MarkersPage(QWidget):
