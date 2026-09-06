@@ -216,9 +216,12 @@ class ScreenMarkers(QObject):
             panel.moved.connect(self._on_panel_moved)
             panel.show()
             self._panels.append(panel)
+        logger.debug("Marker editing on: %d panels at %s", len(self._panels), origin)
         self._update_visibility()
 
     def _close_panels(self):
+        if self._panels:
+            logger.debug("Marker editing off")
         for panel in self._panels:
             panel.hide()
             panel.deleteLater()
