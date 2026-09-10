@@ -70,9 +70,12 @@ class QuartzGameManager(GameManager):
     def _setup_overlay(self):
         self.overlay = DesktopWideOverlay()
 
+        # No black-screen check here: it grabs the desktop through the legacy
+        # CoreGraphics path, and a process that has done that blocks every
+        # other process's ScreenCaptureKit screenshots for as long as it lives.
+        # The condition it guards against is an X11 compositor problem anyway.
         def start():
             self.overlay.show()
-            self.overlay.check_compatibility()
 
         # Seems like QGraphicsView has a delay before applying stylesheet
         # Put some delay to allow it to initialize and not flash
