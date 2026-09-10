@@ -189,6 +189,24 @@ def main() -> int:
                 print(f"screenshot shape {shot_px.shape} != stream shape {last.shape}")
         except Exception as e:  # the comparison is informational only
             print("screenshot comparison failed:", e)
+    # the production wrapper, as the app uses it
+    from runekit.game.quartz.stream import WindowStream  # noqa: E402
+
+    ws = WindowStream(flt, pw, ph)
+    ws.start()
+    t0 = time.perf_counter()
+    first = None
+    while time.perf_counter() - t0 < 3:
+        Quartz.CFRunLoopRunInMode(Quartz.kCFRunLoopDefaultMode, 0.05, True)
+        if first is None and ws.latest() is not None:
+            first = time.perf_counter() - t0
+    frame = ws.latest()
+    failed = ws.failed()
+    ws.stop()
+    if frame is None:
+        print(f"WindowStream: no frame in 3 s (failed={failed})")
+        return 1
+    print(f"WindowStream: first frame after {first * 1000:.0f} ms, {frame.size} {frame.mode}, failed={failed}")
     return 0
 
 

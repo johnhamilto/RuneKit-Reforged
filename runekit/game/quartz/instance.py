@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from ..instance import GameInstance
 from ..psutil_mixins import PsUtilNetStat
+from .stream import WindowStream
 
 if TYPE_CHECKING:
     from .manager import QuartzGameManager
@@ -181,12 +182,16 @@ class QuartzGameInstance(PsUtilNetStat, GameInstance):
 
     __game_last_grab = 0.0
     __game_last_image = None
+    STREAM_RETRY_S = 5.0
 
     def __init__(self, manager: "QuartzGameManager", wid, pid, **kwargs):
         super().__init__(**kwargs)
         self.manager = manager
         self.wid = wid
         self.pid = pid
+        self._stream = None
+        self._stream_retry_at = 0.0
+        self.positionChanged.connect(self._on_geometry_changed)
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}:{pid}")
         self.obj_pointer = objc.context.register(self)
 
@@ -252,8 +257,51 @@ class QuartzGameInstance(PsUtilNetStat, GameInstance):
             == self.pid
         )
 
+    def set_streaming(self, on: bool):
+        if not on:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream = None
+            return
+        if self._stream is not None and not self._stream.failed():
+            return
+        now = time.monotonic()
+        if now < self._stream_retry_at:
+            return
+        self._stream_retry_at = now + self.STREAM_RETRY_S
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream = None
+        bounds = self.get_position()
+        try:
+            content = _shareable_content()
+            window = next((w for w in content.windows() if w.windowID() == self.wid), None)
+            if window is None:
+                content = _shareable_content(refresh=True)
+                window = next((w for w in content.windows() if w.windowID() == self.wid), None)
+            if window is None:
+                raise ScreenCaptureError(f"Window {self.wid} not found by ScreenCaptureKit")
+            content_filter = (
+                ScreenCaptureKit.SCContentFilter.alloc().initWithDesktopIndependentWindow_(window)
+            )
+            stream = WindowStream(content_filter, bounds.width(), bounds.height())
+            stream.start()
+        except (ScreenCaptureError, RuntimeError) as e:
+            self.logger.warning("Window stream unavailable, using screenshots: %s", e)
+            return
+        self._stream = stream
+
+    def _on_geometry_changed(self, rect: QRect):
+        if self._stream is not None:
+            self._stream.resize(rect.width(), rect.height())
+
     def grab_game(self, max_age_ms: int | None = None) -> Image:
         # FIXME: Crop title bar
+        stream = self._stream
+        if stream is not None:
+            frame = stream.latest()
+            if frame is not None:
+                return frame
         ttl = self.refresh_rate if max_age_ms is None else max_age_ms
         if (time.monotonic() - self.__game_last_grab) * 1000 < ttl:
             return self.__game_last_image

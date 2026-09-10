@@ -459,6 +459,7 @@ class ClueHelper(QObject):
         self._auto_timer.setInterval(AUTO_INTERVAL_MS)
         self._auto_timer.timeout.connect(self._auto_tick)
         self._window_open = False
+        self._stream_instance = None
 
     @property
     def window(self) -> "window_mod.ClueSolverWindow":
@@ -485,6 +486,19 @@ class ClueHelper(QObject):
     def _on_window_visibility(self, visible: bool):
         self._window_open = visible
         self._sync_auto()
+        self._sync_stream()
+
+    def _sync_stream(self):
+        """Keep a live feed of the game window while the solver window is open,
+        so screening and solving read frames instead of taking screenshots."""
+        instance = None
+        if self._window_open and self.instance_provider:
+            instance = self.instance_provider()
+        if self._stream_instance is not None and self._stream_instance is not instance:
+            self._stream_instance.set_streaming(False)
+        self._stream_instance = instance
+        if instance is not None:
+            instance.set_streaming(True)
 
     def _sync_auto(self):
         """Screen the game only while the solver window is open with
@@ -504,6 +518,7 @@ class ClueHelper(QObject):
         instance = self.instance_provider() if self.instance_provider else None
         if instance is None:
             return
+        self._sync_stream()
         if self._scan_thread is None:
             self._scan_thread = _ScanThread(self.cache_dir, parent=self)
             self._scan_thread.verdict.connect(self._on_scan_verdict)
@@ -551,6 +566,7 @@ class ClueHelper(QObject):
 
         self._auto_solving = auto
         self._instance = instance
+        self._sync_stream()
         logger.info("Clue solve started (%s)", "auto" if auto else "manual")
         self.window.set_busy(True, "Capturing the game…")
         self._thread = _SolveThread(instance, self.cache_dir, parent=self)

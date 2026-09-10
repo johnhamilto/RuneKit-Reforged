@@ -181,7 +181,10 @@ displays and scaled interfaces, so the runeapps Clue Solver cannot work on
 most Mac setups. RuneKit ships its own scale-tolerant solver instead: open
 the clue or puzzle in game, click the tray icon, and choose **Solve Clue on
 Screen**. Tick **Detect clues automatically** in the solver window and it
-watches the screen and solves clues as you open them.
+watches the screen and solves clues as you open them. While the solver
+window is open, RuneKit reads the game through a live ScreenCaptureKit
+stream instead of repeated screenshots, so macOS shows the screen-capture
+indicator in the menu bar for as long as it stays open.
 
 Solved clues show the answer, the solution and fastest travel route from
 the RuneScape Wiki, and a world map with the target marked.

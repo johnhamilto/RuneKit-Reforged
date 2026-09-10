@@ -82,6 +82,8 @@ class QuartzGameManager(GameManager):
         QTimer.singleShot(1000, start)
 
     def stop(self):
+        for instance in self._instances.values():
+            instance.set_streaming(False)
         try:
             self.overlay.hide()
             self.overlay.deleteLater()

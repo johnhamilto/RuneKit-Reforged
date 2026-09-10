@@ -70,8 +70,14 @@ class GameInstance(QObject):
     @abc.abstractmethod
     def grab_game(self, max_age_ms: int | None = None) -> ImageType:
         """Capture the game window. Frames are reused for refresh_rate ms;
-        max_age_ms tightens that for one call."""
+        max_age_ms tightens that for one call. While set_streaming is on,
+        the latest streamed frame is returned instead of a screenshot."""
         ...
+
+    def set_streaming(self, on: bool):
+        """Keep a live feed of the window so grab_game needs no screenshots.
+        A no-op on platforms without one."""
+        pass
 
     @abc.abstractmethod
     def grab_desktop(self, x: int, y: int, w: int, h: int) -> ImageType:
