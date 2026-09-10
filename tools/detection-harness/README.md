@@ -27,3 +27,10 @@ Celtic knot reader check on saved 1x crops (the app leaves one at
 in `frames/knot_*.png`):
 
     python knot_check.py --rings 16,16,16,0 --crossings 8 frames/knot_3ring_1233.png
+
+## Stream check
+
+`python stream_check.py [--seconds 8] [--fps 10] [--native]` streams the game
+window through ScreenCaptureKit and reports frame cadence, copy cost, dirty
+rectangles, the delivery thread, and how a stream frame compares with the
+screenshot path. Run it with the game open.
