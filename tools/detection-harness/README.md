@@ -34,3 +34,8 @@ in `frames/knot_*.png`):
 window through ScreenCaptureKit and reports frame cadence, copy cost, dirty
 rectangles, the delivery thread, and how a stream frame compares with the
 screenshot path. Run it with the game open.
+
+## Anchor check
+
+`python anchor_check.py` runs the clue interface anchors (learn, match,
+content key, store) against synthetic frames. No game or assets needed.

@@ -7,12 +7,16 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QGridLayout,
+    QGroupBox,
     QLabel,
     QPushButton,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
+
+from runekit.cluehelper import anchors as anchors_mod
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +226,7 @@ class ClueSolverWindow(QWidget):
     solve_requested = Signal()
     auto_toggled = Signal(bool)
     visibility_changed = Signal(bool)
+    forget_requested = Signal(str)  # drop the stored anchor for this interface kind
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
@@ -244,6 +249,23 @@ class ClueSolverWindow(QWidget):
         self.auto_check = QCheckBox("Detect clues automatically")
         self.auto_check.toggled.connect(self.auto_toggled)
         layout.addWidget(self.auto_check)
+
+        self.anchor_box = QGroupBox("Interfaces auto-detect watches")
+        grid = QGridLayout(self.anchor_box)
+        self.anchor_rows = {}
+        for row, kind in enumerate(anchors_mod.KINDS):
+            state = QLabel("Not stored")
+            forget = QPushButton("Forget")
+            forget.setEnabled(False)
+            forget.clicked.connect(lambda _=False, k=kind: self.forget_requested.emit(k))
+            grid.addWidget(QLabel(anchors_mod.LABELS[kind]), row, 0)
+            grid.addWidget(state, row, 1)
+            grid.addWidget(forget, row, 2)
+            self.anchor_rows[kind] = (state, forget)
+        hint = QLabel("Open an interface and press Solve to store it. Auto-detect fires only for stored ones.")
+        hint.setWordWrap(True)
+        grid.addWidget(hint, len(anchors_mod.KINDS), 0, 1, 3)
+        layout.addWidget(self.anchor_box)
 
         self.status = QLabel("Open a clue or puzzle in game, then solve.")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -291,6 +313,12 @@ class ClueSolverWindow(QWidget):
             html += f"<hr><small style='color: gray'>{details}</small>"
         self.body.setHtml(html)
         self.body.show()
+
+    def set_anchor_status(self, summary: dict):
+        for kind, (state, forget) in self.anchor_rows.items():
+            text = summary.get(kind)
+            state.setText(text or "Not stored")
+            forget.setEnabled(bool(text))
 
     def open(self):
         self.show()
